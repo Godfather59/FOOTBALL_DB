@@ -31,7 +31,7 @@ A responsive football data and recruitment workspace for players, clubs and comp
 
 ## Data sources and scope
 
-API-Football is the primary source for competition and season scouting. The free plan is quota-limited, so Football DB loads and caches up to eight 20-player pages per scouting search. Available seasons and player-statistics coverage depend on the API-Football subscription and competition.
+API-Football is the primary source for competition and season scouting. Its current free plan allows 100 requests per day and 10 requests per minute, while the players endpoint returns 20 results per page. Football DB therefore loads and caches up to eight pages, or 160 player-statistic records, per scouting search. Available seasons and player-statistics coverage depend on the API-Football subscription and competition.
 
 The Transfermarkt-based providers remain responsible for profile search, market values, contracts and market-value history. Their keyword endpoints can expose fewer profile IDs than their reported totals. API-Football player IDs are not treated as Transfermarkt IDs; league scouting results provide a separate **Find market profile** action to avoid mismatched profiles.
 
