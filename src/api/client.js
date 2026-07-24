@@ -1,5 +1,6 @@
 const API_ROOT = '/api'
 const DEFAULT_CACHE_TTL = 5 * 60 * 1000
+const DAILY_CACHE_TTL = 24 * 60 * 60 * 1000
 const requestCache = new Map()
 
 function makeUrl(source, endpoint) {
@@ -32,6 +33,13 @@ async function parseResponse(res) {
   }
 }
 
+function apiFootballError(errors) {
+  if (!errors) return ''
+  if (Array.isArray(errors)) return errors.filter(Boolean).join(', ')
+  if (typeof errors === 'object') return Object.values(errors).filter(Boolean).join(', ')
+  return String(errors)
+}
+
 async function request(source, endpoint, options = {}) {
   const { signal, cacheTtl = DEFAULT_CACHE_TTL, bypassCache = false } = options
   const url = makeUrl(source, endpoint)
@@ -42,10 +50,7 @@ async function request(source, endpoint, options = {}) {
     if (cached !== null) return cached
   }
 
-  const res = await fetch(url, {
-    headers: { Accept: 'application/json' },
-    signal
-  })
+  const res = await fetch(url, { headers: { Accept: 'application/json' }, signal })
   const body = await parseResponse(res)
 
   if (!res.ok) {
@@ -53,14 +58,15 @@ async function request(source, endpoint, options = {}) {
     throw new Error(`Request failed (${res.status})${detail}`)
   }
 
-  const data = source === 'tm'
-    ? (body?.success === false ? null : body?.data ?? body)
-    : body
-
   if (source === 'tm' && body?.success === false) {
     throw new Error(body.message || 'Football data API error')
   }
+  if (source === 'af') {
+    const detail = apiFootballError(body?.errors)
+    if (detail) throw new Error(`API-Football: ${detail}`)
+  }
 
+  const data = source === 'tm' ? body?.data ?? body : body
   if (!bypassCache && cacheTtl > 0) setCached(cacheKey, data, cacheTtl)
   return data
 }
@@ -139,4 +145,14 @@ export function getCompetition(code, options = {}) {
 
 export function getCompetitionTable(code, options = {}) {
   return request('tm', `competition/${encodeURIComponent(code)}/table`, options)
+}
+
+export function getApiFootballLeagues(searchTerm, season, options = {}) {
+  const params = new URLSearchParams({ search: searchTerm, season: String(season) })
+  return request('af', `leagues?${params}`, { cacheTtl: DAILY_CACHE_TTL, ...options })
+}
+
+export function getApiFootballPlayers(leagueId, season, page = 1, options = {}) {
+  const params = new URLSearchParams({ league: String(leagueId), season: String(season), page: String(page) })
+  return request('af', `players?${params}`, { cacheTtl: DAILY_CACHE_TTL, ...options })
 }
