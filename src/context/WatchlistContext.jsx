@@ -1,17 +1,32 @@
 import { createContext, useCallback, useContext, useMemo, useState } from 'react'
 import { getClubFromAssignments, getClubName, getContractEndDate, getPositionName } from '../api/utils'
 
-const STORAGE_KEY = 'football-db-watchlist-v1'
+const STORAGE_KEY = 'football-db-watchlist-v2'
+const FOLDER_KEY = 'football-db-shortlist-folders-v1'
 const WatchlistContext = createContext(null)
+const DEFAULT_FOLDER = { id: 'general', name: 'General shortlist' }
+
+function readJson(key, fallback) {
+  if (typeof window === 'undefined') return fallback
+  try {
+    const value = JSON.parse(window.localStorage.getItem(key) || 'null')
+    return value ?? fallback
+  } catch {
+    return fallback
+  }
+}
 
 function readStoredItems() {
-  if (typeof window === 'undefined') return []
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || '[]')
-    return Array.isArray(parsed) ? parsed.filter(item => item?.id) : []
-  } catch {
-    return []
-  }
+  const current = readJson(STORAGE_KEY, null)
+  if (Array.isArray(current)) return current.filter(item => item?.id).map(item => ({ folderId: 'general', priority: 'Medium', status: 'Watching', rating: 0, estimatedFee: '', notes: '', ...item }))
+  const legacy = readJson('football-db-watchlist-v1', [])
+  return Array.isArray(legacy) ? legacy.filter(item => item?.id).map(item => ({ folderId: 'general', priority: 'Medium', status: 'Watching', rating: 0, estimatedFee: '', notes: '', ...item })) : []
+}
+
+function readFolders() {
+  const stored = readJson(FOLDER_KEY, [])
+  const folders = Array.isArray(stored) ? stored.filter(folder => folder?.id && folder?.name) : []
+  return folders.some(folder => folder.id === DEFAULT_FOLDER.id) ? folders : [DEFAULT_FOLDER, ...folders]
 }
 
 export function toWatchlistItem(player) {
@@ -25,53 +40,73 @@ export function toWatchlistItem(player) {
     clubName: getClubName(club),
     marketValue: player?.marketValueDetails?.current?.value ?? null,
     contractEndDate: getContractEndDate(club),
+    folderId: 'general',
+    priority: 'Medium',
+    status: 'Watching',
+    rating: 0,
+    estimatedFee: '',
+    notes: '',
     savedAt: new Date().toISOString()
   }
 }
 
 export function WatchlistProvider({ children }) {
   const [items, setItems] = useState(readStoredItems)
+  const [folders, setFolders] = useState(readFolders)
 
-  const persist = useCallback(nextItems => {
-    setItems(nextItems)
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nextItems))
+  const saveItems = useCallback(updater => {
+    setItems(current => {
+      const next = typeof updater === 'function' ? updater(current) : updater
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
+      return next
+    })
   }, [])
 
-  const add = useCallback(player => {
-    const item = toWatchlistItem(player)
+  const saveFolders = useCallback(updater => {
+    setFolders(current => {
+      const next = typeof updater === 'function' ? updater(current) : updater
+      window.localStorage.setItem(FOLDER_KEY, JSON.stringify(next))
+      return next
+    })
+  }, [])
+
+  const add = useCallback((player, folderId = 'general') => {
+    const item = { ...toWatchlistItem(player), folderId }
     if (!item.id) return
-    setItems(current => {
-      const next = [item, ...current.filter(existing => existing.id !== item.id)]
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
-      return next
-    })
-  }, [])
+    saveItems(current => [item, ...current.filter(existing => existing.id !== item.id)])
+  }, [saveItems])
 
-  const remove = useCallback(id => {
-    setItems(current => {
-      const next = current.filter(item => item.id !== String(id))
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
-      return next
-    })
-  }, [])
+  const remove = useCallback(id => saveItems(current => current.filter(item => item.id !== String(id))), [saveItems])
+  const clear = useCallback(() => saveItems([]), [saveItems])
+  const has = useCallback(id => items.some(item => item.id === String(id)), [items])
 
   const toggle = useCallback(player => {
     const id = String(player?.id || '')
     if (!id) return
-    setItems(current => {
-      const exists = current.some(item => item.id === id)
-      const next = exists
-        ? current.filter(item => item.id !== id)
-        : [toWatchlistItem(player), ...current]
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
-      return next
-    })
-  }, [])
+    saveItems(current => current.some(item => item.id === id)
+      ? current.filter(item => item.id !== id)
+      : [toWatchlistItem(player), ...current])
+  }, [saveItems])
 
-  const clear = useCallback(() => persist([]), [persist])
-  const has = useCallback(id => items.some(item => item.id === String(id)), [items])
+  const updateItem = useCallback((id, changes) => {
+    saveItems(current => current.map(item => item.id === String(id) ? { ...item, ...changes } : item))
+  }, [saveItems])
 
-  const value = useMemo(() => ({ items, add, remove, toggle, clear, has }), [items, add, remove, toggle, clear, has])
+  const addFolder = useCallback(name => {
+    const cleanName = String(name || '').trim()
+    if (!cleanName) return null
+    const folder = { id: `${Date.now()}-${cleanName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`, name: cleanName }
+    saveFolders(current => [...current, folder])
+    return folder
+  }, [saveFolders])
+
+  const removeFolder = useCallback(id => {
+    if (id === 'general') return
+    saveFolders(current => current.filter(folder => folder.id !== id))
+    saveItems(current => current.map(item => item.folderId === id ? { ...item, folderId: 'general' } : item))
+  }, [saveFolders, saveItems])
+
+  const value = useMemo(() => ({ items, folders, add, remove, toggle, clear, has, updateItem, addFolder, removeFolder }), [items, folders, add, remove, toggle, clear, has, updateItem, addFolder, removeFolder])
   return <WatchlistContext.Provider value={value}>{children}</WatchlistContext.Provider>
 }
 
