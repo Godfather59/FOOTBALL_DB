@@ -28,15 +28,72 @@ export function getPositionName(position) {
   return position.name || position.shortName || ''
 }
 
+export function getActiveClubAssignment(assignments, now = new Date()) {
+  if (!Array.isArray(assignments)) return null
+  const timestamp = now.getTime()
+  return assignments.find(item => {
+    if (item?.type !== 'club') return false
+    if (!item.endDate) return true
+    const end = new Date(item.endDate).getTime()
+    return Number.isFinite(end) && end >= timestamp
+  }) || null
+}
+
 export function getClubFromAssignments(assignments) {
   if (!Array.isArray(assignments) || assignments.length === 0) return null
-  return assignments.find(item => item.type === 'club' && !item.endDate)
+  return getActiveClubAssignment(assignments)
     || assignments.find(item => item.type === 'club')
     || assignments[0]
 }
 
 export function getClubName(assignment) {
   return assignment?.clubName || assignment?.name || assignment?.club?.name || ''
+}
+
+export function getContractEndDate(playerOrAssignment) {
+  if (!playerOrAssignment) return null
+  const assignment = Array.isArray(playerOrAssignment.clubAssignments)
+    ? getActiveClubAssignment(playerOrAssignment.clubAssignments)
+    : playerOrAssignment
+  return assignment?.contractEndDate || assignment?.contractUntil || assignment?.endDate || null
+}
+
+export function monthsUntil(dateValue, now = new Date()) {
+  if (!dateValue) return null
+  const date = new Date(dateValue)
+  if (Number.isNaN(date.getTime())) return null
+  return (date.getTime() - now.getTime()) / (1000 * 60 * 60 * 24 * 30.4375)
+}
+
+export function getContractOpportunity(player, withinMonths = 18, now = new Date()) {
+  const activeClub = getActiveClubAssignment(player?.clubAssignments, now)
+  if (!activeClub || !getClubName(activeClub)) {
+    return { type: 'free-agent', label: 'Free agent', monthsRemaining: null, contractEndDate: null }
+  }
+
+  const contractEndDate = getContractEndDate(activeClub)
+  const monthsRemaining = monthsUntil(contractEndDate, now)
+  if (monthsRemaining === null) {
+    return { type: 'unknown', label: 'Contract unknown', monthsRemaining: null, contractEndDate: null }
+  }
+  if (monthsRemaining <= 0) {
+    return { type: 'expired', label: 'Contract expired', monthsRemaining, contractEndDate }
+  }
+  if (monthsRemaining <= withinMonths) {
+    const rounded = Math.max(1, Math.ceil(monthsRemaining))
+    return { type: 'expiring', label: `Expires in ${rounded} month${rounded === 1 ? '' : 's'}`, monthsRemaining, contractEndDate }
+  }
+  return { type: 'secure', label: 'Contract secured', monthsRemaining, contractEndDate }
+}
+
+export function summarizePerformances(data) {
+  const performances = Array.isArray(data) ? data : data?.performances || []
+  return performances.reduce((totals, item) => ({
+    appearances: totals.appearances + Number(item.gamesPlayed || item.appearances || 0),
+    goals: totals.goals + Number(item.goalsScored || item.goals || 0),
+    assists: totals.assists + Number(item.assists || 0),
+    minutes: totals.minutes + Number(item.minutesPlayed || item.minutes || 0)
+  }), { appearances: 0, goals: 0, assists: 0, minutes: 0 })
 }
 
 export function getAge(dateOfBirth) {
@@ -86,4 +143,10 @@ export function uniqueBy(items, keySelector) {
     seen.add(key)
     return true
   })
+}
+
+export function chunk(items, size = 20) {
+  const chunks = []
+  for (let index = 0; index < items.length; index += size) chunks.push(items.slice(index, index + size))
+  return chunks
 }
