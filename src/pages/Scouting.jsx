@@ -106,6 +106,11 @@ export default function Scouting() {
   const setFilter = (key, value) => setFilters(current => ({ ...current, [key]: value }))
   const availableSorts = SORTS.filter(([value]) => source === 'api-football' ? !value.startsWith('value-') : value !== 'rating-desc')
 
+  function changeSource(nextSource) {
+    setSource(nextSource)
+    setFilter('sort', nextSource === 'api-football' ? 'contributions-desc' : 'value-desc')
+  }
+
   function submit(event) {
     event.preventDefault()
     setError(null)
@@ -125,7 +130,7 @@ export default function Scouting() {
       <div className="page-heading"><div><span className="eyebrow">Recruitment workspace</span><h1>Advanced scouting</h1></div></div>
       <form className="filter-panel" onSubmit={submit}>
         <div className="filter-grid scouting-filter-grid">
-          <label>Data source<select value={source} onChange={event => setSource(event.target.value)}><option value="api-football">API-Football league statistics</option><option value="legacy-keyword">Market value and contracts keyword</option></select></label>
+          <label>Data source<select value={source} onChange={event => changeSource(event.target.value)}><option value="api-football">API-Football league statistics</option><option value="legacy-keyword">Market value and contracts keyword</option></select></label>
           {source === 'api-football' ? <>
             <label>Competition<select value={competitionCode} onChange={event => setCompetitionCode(event.target.value)}>{DOMESTIC_COMPETITIONS.map(item => <option key={item.code} value={item.code}>{item.name} · {item.country}</option>)}</select></label>
             <label>Season start year<input inputMode="numeric" value={season} onChange={event => setSeason(event.target.value)} placeholder="2025" /></label>
