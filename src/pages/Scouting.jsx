@@ -104,6 +104,7 @@ export default function Scouting() {
   }), [players, stats, filters, source])
 
   const setFilter = (key, value) => setFilters(current => ({ ...current, [key]: value }))
+  const availableSorts = SORTS.filter(([value]) => source === 'api-football' ? !value.startsWith('value-') : value !== 'rating-desc')
 
   function submit(event) {
     event.preventDefault()
@@ -137,7 +138,7 @@ export default function Scouting() {
           {COMMON_NUMBERS.map(([key, label, min, max]) => <label key={key}>{label}<input type="number" min={min} max={max} value={filters[key]} onChange={event => setFilter(key, event.target.value)} /></label>)}
           {source !== 'api-football' && MARKET_NUMBERS.map(([key, label, min]) => <label key={key}>{label}<input type="number" min={min} value={filters[key]} onChange={event => setFilter(key, event.target.value)} /></label>)}
           {source !== 'api-football' && <label>Contract expires within<select value={filters.contractMonths} onChange={event => setFilter('contractMonths', event.target.value)}><option value="">Any contract</option>{[6, 12, 18, 24].map(months => <option key={months} value={months}>{months} months</option>)}</select></label>}
-          <label>Sort results<select value={filters.sort} onChange={event => setFilter('sort', event.target.value)}>{SORTS.filter(([value]) => source === 'api-football' || value !== 'rating-desc').map(([value, text]) => <option key={value} value={value}>{text}</option>)}</select></label>
+          <label>Sort results<select value={filters.sort} onChange={event => setFilter('sort', event.target.value)}>{availableSorts.map(([value, text]) => <option key={value} value={value}>{text}</option>)}</select></label>
         </div>
         <div className="heading-actions">
           {source !== 'api-football' && <label className="advanced-toggle"><input type="checkbox" checked={filters.freeAgentsOnly} onChange={event => setFilter('freeAgentsOnly', event.target.checked)} /> Free agents only</label>}
