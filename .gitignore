@@ -1,0 +1,7 @@
+node_modules
+dist
+.antigravity
+.vscode
+*.local
+.DS_Store
+Thumbs.db
