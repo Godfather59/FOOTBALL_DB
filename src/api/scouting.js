@@ -1,11 +1,13 @@
 import {
   getClubSquad,
+  getCompetition,
   getCompetitionTable,
   getPlayers,
   getPlayerSeasonalStats,
   getPlayerStatsByCompetition,
   search
 } from './client.js'
+import { getKnownCompetition } from './competitionCatalog.js'
 import { chunk, getPositionName, isAbortError, mapWithConcurrency, summarizePerformances } from './utils.js'
 
 export const MAX_SCOUTING_PROFILES = 240
@@ -35,6 +37,48 @@ function squadRows(data) {
   return Array.isArray(data) ? data : data?.squad || data?.players || []
 }
 
+function nestedRows(data, depth = 0) {
+  if (depth > 5 || data == null) return []
+  if (Array.isArray(data)) return data.flatMap(item => nestedRows(item, depth + 1))
+  if (typeof data !== 'object') return []
+
+  const looksLikeClubRow = Boolean(
+    data.clubId || data.teamId || data.participantId || data.club || data.team || data.participant ||
+    data.clubName || data.teamName
+  )
+  if (looksLikeClubRow) return [data]
+
+  const keys = ['table', 'standings', 'rows', 'data', 'groups', 'group', 'clubs', 'teams', 'participants', 'entries']
+  return keys.flatMap(key => nestedRows(data[key], depth + 1))
+}
+
+function clubIdFromRow(row) {
+  return row?.clubId || row?.club?.id || row?.club?.clubId || row?.teamId || row?.team?.id ||
+    row?.team?.teamId || row?.participantId || row?.participant?.id || row?.entity?.id || null
+}
+
+function clubNameFromRow(row) {
+  if (row?.clubName) return row.clubName
+  if (typeof row?.club === 'string') return row.club
+  if (row?.club?.name) return row.club.name
+  if (row?.teamName) return row.teamName
+  if (typeof row?.team === 'string') return row.team
+  if (row?.team?.name) return row.team.name
+  return row?.participant?.name || row?.entity?.name || row?.name || ''
+}
+
+export function competitionClubReferences(data) {
+  const ids = new Set()
+  const names = new Set()
+  for (const row of nestedRows(data)) {
+    const id = clubIdFromRow(row)
+    const name = clubNameFromRow(row).trim()
+    if (id) ids.add(String(id))
+    if (name) names.add(name)
+  }
+  return { ids: [...ids], names: [...names] }
+}
+
 function passesProfileFilters(player, filters = {}) {
   const age = player.lifeDates?.age
   const value = Number(player.marketValueDetails?.current?.value || 0)
@@ -46,15 +90,20 @@ function passesProfileFilters(player, filters = {}) {
   return true
 }
 
-async function discoverIds(config, options) {
-  if (config.source === 'keyword') {
-    const result = await search(config.query, options)
-    return { ids: result.playerIds || [], clubCount: 0 }
-  }
-  const table = await getCompetitionTable(config.competitionCode, options)
-  const rows = table?.table || table?.standings || []
-  const clubIds = [...new Set(rows.map(row => row.clubId || row.club?.id).filter(Boolean).map(String))]
-  if (!clubIds.length) throw new Error('The provider did not return club IDs for this competition.')
+async function resolveClubNames(names, options) {
+  const resolved = await mapWithConcurrency(names, 3, async name => {
+    try {
+      const result = await search(name, options)
+      return result.clubIds?.[0] ? String(result.clubIds[0]) : null
+    } catch (error) {
+      if (isAbortError(error)) throw error
+      return null
+    }
+  }, options.signal)
+  return resolved.filter(Boolean)
+}
+
+async function loadSquadPlayerIds(clubIds, options) {
   const groups = await mapWithConcurrency(clubIds, 3, async clubId => {
     try {
       return squadRows(await getClubSquad(clubId, options))
@@ -63,8 +112,62 @@ async function discoverIds(config, options) {
       return []
     }
   }, options.signal)
-  const ids = [...new Set(groups.flat().map(item => item.playerId || item.id).filter(Boolean).map(String))]
-  return { ids, clubCount: clubIds.length }
+  return [...new Set(groups.flat().map(item => item.playerId || item.id).filter(Boolean).map(String))]
+}
+
+async function competitionSearchFallback(config, options) {
+  const known = getKnownCompetition(config.competitionCode)
+  const terms = [...new Set([known?.name, config.competitionCode].filter(Boolean))]
+  const results = await mapWithConcurrency(terms, 2, async term => {
+    try {
+      return await search(term, options)
+    } catch (error) {
+      if (isAbortError(error)) throw error
+      return null
+    }
+  }, options.signal)
+  return {
+    playerIds: [...new Set(results.flatMap(result => result?.playerIds || []).map(String))],
+    clubIds: [...new Set(results.flatMap(result => result?.clubIds || []).map(String))]
+  }
+}
+
+async function discoverIds(config, options) {
+  if (config.source === 'keyword') {
+    const result = await search(config.query, options)
+    return { ids: result.playerIds || [], clubCount: 0, strategy: 'keyword' }
+  }
+
+  const [tableResult, competitionResult] = await Promise.allSettled([
+    getCompetitionTable(config.competitionCode, options),
+    getCompetition(config.competitionCode, options)
+  ])
+  if (tableResult.status === 'rejected' && isAbortError(tableResult.reason)) throw tableResult.reason
+  if (competitionResult.status === 'rejected' && isAbortError(competitionResult.reason)) throw competitionResult.reason
+
+  const tableRefs = competitionClubReferences(tableResult.status === 'fulfilled' ? tableResult.value : null)
+  const competitionRefs = competitionClubReferences(competitionResult.status === 'fulfilled' ? competitionResult.value : null)
+  const directClubIds = [...new Set([...tableRefs.ids, ...competitionRefs.ids])]
+  const clubNames = [...new Set([...tableRefs.names, ...competitionRefs.names])]
+  const resolvedClubIds = await resolveClubNames(clubNames, options)
+  let clubIds = [...new Set([...directClubIds, ...resolvedClubIds])]
+
+  if (clubIds.length) {
+    const ids = await loadSquadPlayerIds(clubIds, options)
+    if (ids.length) return { ids, clubCount: clubIds.length, strategy: resolvedClubIds.length ? 'resolved standings' : 'standings' }
+  }
+
+  const fallback = await competitionSearchFallback(config, options)
+  clubIds = [...new Set([...clubIds, ...fallback.clubIds])]
+  if (clubIds.length) {
+    const ids = await loadSquadPlayerIds(clubIds, options)
+    if (ids.length) return { ids, clubCount: clubIds.length, strategy: 'competition search' }
+  }
+  if (fallback.playerIds.length) {
+    return { ids: fallback.playerIds, clubCount: 0, strategy: 'competition player search' }
+  }
+
+  throw new Error('The provider did not expose clubs or players for this competition. Try another competition or switch Candidate source to Optional keyword and enter the league or club name.')
 }
 
 export async function loadScoutingPool(config, options = {}) {
@@ -90,6 +193,11 @@ export async function loadScoutingPool(config, options = {}) {
   return {
     profiles,
     stats: Object.fromEntries(entries),
-    coverage: { clubs: discovery.clubCount, discovered: discovery.ids.length, analyzed: profiles.length }
+    coverage: {
+      clubs: discovery.clubCount,
+      discovered: discovery.ids.length,
+      analyzed: profiles.length,
+      strategy: discovery.strategy
+    }
   }
 }
