@@ -1,99 +1,142 @@
-const BASE_URL = 'https://tmapi-alpha.transfermarkt.technology/'
-const HEADERS = { Accept: 'application/json' }
+const API_ROOT = '/api'
+const DEFAULT_CACHE_TTL = 5 * 60 * 1000
+const requestCache = new Map()
 
-async function request(endpoint) {
-  const res = await fetch(`${BASE_URL}${endpoint}`, { headers: HEADERS })
-  if (!res.ok) {
-    let msg = `HTTP ${res.status}`
-    try { const b = await res.json(); if (b.message) msg += `: ${b.message}` } catch {}
-    throw new Error(msg)
+function makeUrl(source, endpoint) {
+  const cleanEndpoint = String(endpoint).replace(/^\/+/, '')
+  return `${API_ROOT}/${source}/${cleanEndpoint}`
+}
+
+function getCached(key) {
+  const cached = requestCache.get(key)
+  if (!cached) return null
+  if (cached.expiresAt <= Date.now()) {
+    requestCache.delete(key)
+    return null
   }
-  const body = await res.json()
-  if (!body.success) throw new Error(body.message || 'API error')
-  return body.data
+  return cached.value
 }
 
-export async function search(query) {
-  const data = await request(`quick-search?term=${encodeURIComponent(query)}`)
-  return {
-    playerIds: data.result.playerIds || [],
-    clubIds: data.result.clubIds || [],
-    competitionIds: data.result.competitionIds || [],
-    totalCount: data.totalCount
+function setCached(key, value, ttl) {
+  requestCache.set(key, { value, expiresAt: Date.now() + ttl })
+}
+
+async function parseResponse(res) {
+  const contentType = res.headers.get('content-type') || ''
+  if (contentType.includes('application/json')) return res.json()
+  const text = await res.text()
+  try {
+    return JSON.parse(text)
+  } catch {
+    return text
   }
 }
 
-export async function getPlayers(ids) {
-  if (!ids.length) return []
-  const qs = ids.map(id => `ids[]=${id}`).join('&')
-  return request(`players?${qs}`)
-}
+async function request(source, endpoint, options = {}) {
+  const { signal, cacheTtl = DEFAULT_CACHE_TTL, bypassCache = false } = options
+  const url = makeUrl(source, endpoint)
+  const cacheKey = `${source}:${endpoint}`
 
-export async function getPlayer(id) {
-  return request(`player/${id}`)
-}
+  if (!bypassCache && cacheTtl > 0) {
+    const cached = getCached(cacheKey)
+    if (cached !== null) return cached
+  }
 
-export async function getPlayerMarketValue(id) {
-  return request(`player/${id}/market-value-history`)
-}
-
-export async function getPlayerTransfers(id) {
-  return request(`transfer/history/player/${id}`)
-}
-
-export async function getPlayerInjuries(id) {
-  return request(`player/${id}/injury`)
-}
-
-export async function getPlayerNationalCareer(id) {
-  return request(`player/${id}/national-career-history`)
-}
-
-const CEAPI_BASE = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-  ? ''
-  : 'https://www.transfermarkt.com.tr'
-
-export async function getPlayerStatsByCompetition(id) {
-  const res = await fetch(`${CEAPI_BASE}/ceapi/player/${id}/performancepercompetition`, {
-    headers: { Accept: 'application/json' }
-  })
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  return res.json()
-}
-
-export async function getPlayerSeasonalStats(id, season) {
-  const url = season
-    ? `${CEAPI_BASE}/ceapi/player/${id}/performance?season=${season}`
-    : `${CEAPI_BASE}/ceapi/player/${id}/performance`
   const res = await fetch(url, {
-    headers: { Accept: 'application/json' }
+    headers: { Accept: 'application/json' },
+    signal
   })
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  return res.json()
+  const body = await parseResponse(res)
+
+  if (!res.ok) {
+    const detail = typeof body === 'object' && body?.message ? `: ${body.message}` : ''
+    throw new Error(`Request failed (${res.status})${detail}`)
+  }
+
+  const data = source === 'tm'
+    ? (body?.success === false ? null : body?.data ?? body)
+    : body
+
+  if (source === 'tm' && body?.success === false) {
+    throw new Error(body.message || 'Football data API error')
+  }
+
+  if (!bypassCache && cacheTtl > 0) setCached(cacheKey, data, cacheTtl)
+  return data
 }
 
-export async function getClubs(ids) {
-  if (!ids.length) return []
-  const qs = ids.map(id => `ids[]=${id}`).join('&')
-  return request(`clubs?${qs}`)
+export function clearApiCache() {
+  requestCache.clear()
 }
 
-export async function getClub(id) {
-  return request(`club/${id}`)
+export async function search(query, options = {}) {
+  const data = await request('tm', `quick-search?term=${encodeURIComponent(query)}`, options)
+  const result = data?.result || {}
+  return {
+    playerIds: result.playerIds || [],
+    clubIds: result.clubIds || [],
+    competitionIds: result.competitionIds || [],
+    totalCount: data?.totalCount || {}
+  }
 }
 
-export async function getClubSquad(id) {
-  return request(`club/${id}/squad`)
+export async function getPlayers(ids, options = {}) {
+  if (!ids?.length) return []
+  const qs = ids.map(id => `ids[]=${encodeURIComponent(id)}`).join('&')
+  return request('tm', `players?${qs}`, options)
 }
 
-export async function getClubStadium(id) {
-  return request(`club/${id}/stadium`)
+export function getPlayer(id, options = {}) {
+  return request('tm', `player/${encodeURIComponent(id)}`, options)
 }
 
-export async function getCompetition(code) {
-  return request(`competition/${code}`)
+export function getPlayerMarketValue(id, options = {}) {
+  return request('tm', `player/${encodeURIComponent(id)}/market-value-history`, options)
 }
 
-export async function getCompetitionTable(code) {
-  return request(`competition/${code}/table`)
+export function getPlayerTransfers(id, options = {}) {
+  return request('tm', `transfer/history/player/${encodeURIComponent(id)}`, options)
+}
+
+export function getPlayerInjuries(id, options = {}) {
+  return request('tm', `player/${encodeURIComponent(id)}/injury`, options)
+}
+
+export function getPlayerNationalCareer(id, options = {}) {
+  return request('tm', `player/${encodeURIComponent(id)}/national-career-history`, options)
+}
+
+export function getPlayerStatsByCompetition(id, options = {}) {
+  return request('ce', `player/${encodeURIComponent(id)}/performancepercompetition`, options)
+}
+
+export function getPlayerSeasonalStats(id, season, options = {}) {
+  const seasonQuery = season ? `?season=${encodeURIComponent(season)}` : ''
+  return request('ce', `player/${encodeURIComponent(id)}/performance${seasonQuery}`, options)
+}
+
+export async function getClubs(ids, options = {}) {
+  if (!ids?.length) return []
+  const qs = ids.map(id => `ids[]=${encodeURIComponent(id)}`).join('&')
+  return request('tm', `clubs?${qs}`, options)
+}
+
+export function getClub(id, options = {}) {
+  return request('tm', `club/${encodeURIComponent(id)}`, options)
+}
+
+export function getClubSquad(id, options = {}) {
+  return request('tm', `club/${encodeURIComponent(id)}/squad`, options)
+}
+
+export function getClubStadium(id, options = {}) {
+  return request('tm', `club/${encodeURIComponent(id)}/stadium`, options)
+}
+
+export function getCompetition(code, options = {}) {
+  return request('tm', `competition/${encodeURIComponent(code)}`, options)
+}
+
+export function getCompetitionTable(code, options = {}) {
+  return request('tm', `competition/${encodeURIComponent(code)}/table`, options)
 }

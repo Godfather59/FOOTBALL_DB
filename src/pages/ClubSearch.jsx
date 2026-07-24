@@ -1,97 +1,145 @@
-import { useState, useEffect, useCallback } from 'react'
-import { useSearchParams, useNavigate } from 'react-router-dom'
-import { search, getClubs } from '../api/client'
-import { formatMarketValue, getImageFallback } from '../api/utils'
+import { useEffect, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import { getClubs, search } from '../api/client'
+import { formatMarketValue, getImageFallback, isAbortError, parsePositiveInt } from '../api/utils'
+import Pagination from '../components/Pagination'
+import { CardSkeletonGrid, EmptyState, ErrorState } from '../components/StateMessage'
+
+const PAGE_SIZE = 20
 
 export default function ClubSearch() {
-  const [searchParams] = useSearchParams()
-  const [query, setQuery] = useState(searchParams.get('q') || '')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const navigate = useNavigate()
+  const q = searchParams.get('q')?.trim() || ''
+  const requestedPage = parsePositiveInt(searchParams.get('page'), 1)
+
+  const [query, setQuery] = useState(q)
   const [clubs, setClubs] = useState([])
-  const [total, setTotal] = useState(0)
+  const [availableIds, setAvailableIds] = useState([])
+  const [reportedTotal, setReportedTotal] = useState(0)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
-  const navigate = useNavigate()
+  const [retryKey, setRetryKey] = useState(0)
 
-  const q = searchParams.get('q') || ''
+  useEffect(() => setQuery(q), [q])
 
-  const doSearch = useCallback(async () => {
-    if (!q) return
-    setLoading(true)
-    setError(null)
-    try {
-      const searchResult = await search(q)
-      const ids = searchResult.clubIds.slice(0, 20)
-      setTotal(searchResult.totalCount?.clubs || ids.length)
-      if (ids.length > 0) {
-        const profs = await getClubs(ids)
-        setClubs(profs)
-      } else {
-        setClubs([])
-      }
-    } catch (e) {
-      setError(e.message)
-    } finally {
-      setLoading(false)
+  const pageCount = Math.max(1, Math.ceil(availableIds.length / PAGE_SIZE))
+  const page = Math.min(requestedPage, pageCount)
+
+  useEffect(() => {
+    if (!q) {
+      setClubs([])
+      setAvailableIds([])
+      setReportedTotal(0)
+      return undefined
     }
-  }, [q])
 
-  useEffect(() => { doSearch() }, [doSearch])
+    const controller = new AbortController()
 
-  function handleSearch(e) {
-    e.preventDefault()
-    if (!query.trim()) return
-    navigate(`/clubs?q=${encodeURIComponent(query.trim())}`)
+    async function loadClubs() {
+      setLoading(true)
+      setError(null)
+      try {
+        const result = await search(q, { signal: controller.signal, bypassCache: retryKey > 0 })
+        const ids = result.clubIds || []
+        const nextPageCount = Math.max(1, Math.ceil(ids.length / PAGE_SIZE))
+        const safePage = Math.min(requestedPage, nextPageCount)
+        const start = (safePage - 1) * PAGE_SIZE
+        const profiles = await getClubs(ids.slice(start, start + PAGE_SIZE), {
+          signal: controller.signal,
+          bypassCache: retryKey > 0
+        })
+
+        setAvailableIds(ids)
+        setReportedTotal(result.totalCount?.clubs || ids.length)
+        setClubs(Array.isArray(profiles) ? profiles : [])
+
+        if (safePage !== requestedPage) {
+          setSearchParams({ q, page: String(safePage) }, { replace: true })
+        }
+      } catch (loadError) {
+        if (!isAbortError(loadError)) setError(loadError.message)
+      } finally {
+        if (!controller.signal.aborted) setLoading(false)
+      }
+    }
+
+    loadClubs()
+    return () => controller.abort()
+  }, [q, requestedPage, retryKey, setSearchParams])
+
+  function handleSearch(event) {
+    event.preventDefault()
+    const value = query.trim()
+    if (!value) return
+    setSearchParams({ q: value, page: '1' })
+  }
+
+  function handlePageChange(nextPage) {
+    setSearchParams({ q, page: String(nextPage) })
+    window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
   if (!q) {
     return (
-      <div className="search-section">
-        <h2>Search Clubs</h2>
-        <p>Find clubs and teams from any league</p>
+      <section className="search-section">
+        <span className="eyebrow">Club database</span>
+        <h1>Search clubs</h1>
+        <p>Find squads, stadium information and club market values.</p>
         <form className="search-box" onSubmit={handleSearch}>
-          <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Club name..." />
+          <input value={query} onChange={event => setQuery(event.target.value)} placeholder="Club name…" aria-label="Club name" />
           <button type="submit">Search</button>
         </form>
-      </div>
+      </section>
     )
   }
 
   return (
     <div>
-      <form className="search-box" onSubmit={handleSearch} style={{ marginBottom: 20 }}>
-        <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Club name..." />
-        <button type="submit">Search</button>
-      </form>
-
-      <p style={{ marginBottom: 12, color: '#777' }}>Results for &ldquo;{q}&rdquo; — {total} found</p>
-
-      {loading && <div className="loading"><div className="spinner" /></div>}
-      {error && <div className="error">{error}</div>}
-
-      <div className="card-grid">
-        {clubs.map(c => (
-          <div key={c.id} className="card" onClick={() => navigate(`/clubs/${c.id}`)}>
-            <div style={{ display: 'flex', padding: 12, gap: 12 }}>
-              <img
-                src={c.crestUrl}
-                alt={c.name}
-                style={{ width: 64, height: 64, borderRadius: 8, objectFit: 'contain', background: '#f5f5f5' }}
-                onError={getImageFallback}
-              />
-              <div style={{ flex: 1 }}>
-                <div className="card-title">{c.name}</div>
-                <div className="card-subtitle">{c.baseDetails?.shortName || c.name}</div>
-                {c.squadDetails && (
-                  <div className="card-detail">{c.squadDetails.squadSize} players · Avg age {c.squadDetails.averageAge}</div>
-                )}
-                <div className="card-footer">
-                  <span className="card-price">{formatMarketValue(c.squadDetails?.totalMarketValue)}</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        ))}
+      <div className="page-heading">
+        <div>
+          <span className="eyebrow">Club database</span>
+          <h1>Club results</h1>
+        </div>
+        <form className="search-box compact" onSubmit={handleSearch}>
+          <input value={query} onChange={event => setQuery(event.target.value)} placeholder="Club name…" aria-label="Club name" />
+          <button type="submit">Search</button>
+        </form>
       </div>
+
+      <p className="result-summary">
+        Results for <strong>“{q}”</strong> · {reportedTotal} reported
+        {availableIds.length < reportedTotal && ` · ${availableIds.length} profiles available from the provider`}
+      </p>
+
+      {error && <ErrorState message={error} onRetry={() => setRetryKey(key => key + 1)} />}
+      {loading && <CardSkeletonGrid />}
+
+      {!loading && !error && clubs.length > 0 && (
+        <>
+          <div className="card-grid">
+            {clubs.map(club => (
+              <article key={club.id} className="card result-card" onClick={() => navigate(`/clubs/${club.id}`)}>
+                <img className="club-crest" src={club.crestUrl} alt="" onError={getImageFallback} />
+                <div className="card-content">
+                  <h2>{club.name}</h2>
+                  <p>{club.baseDetails?.shortName || club.baseDetails?.primaryCompetitionId || 'Club profile'}</p>
+                  <div className="card-meta">
+                    {club.squadDetails?.squadSize != null && <span>{club.squadDetails.squadSize} players</span>}
+                    {club.squadDetails?.averageAge != null && <span>Average age {club.squadDetails.averageAge}</span>}
+                  </div>
+                  <strong className="card-price">{formatMarketValue(club.squadDetails?.totalMarketValue)}</strong>
+                </div>
+              </article>
+            ))}
+          </div>
+          <Pagination page={page} pageCount={pageCount} onPageChange={handlePageChange} />
+        </>
+      )}
+
+      {!loading && !error && clubs.length === 0 && (
+        <EmptyState title="No clubs found" message="Try another spelling or search using the full club name." />
+      )}
     </div>
   )
 }

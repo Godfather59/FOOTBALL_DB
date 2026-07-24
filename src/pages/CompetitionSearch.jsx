@@ -1,104 +1,140 @@
-import { useState, useEffect, useCallback } from 'react'
-import { useSearchParams, useNavigate } from 'react-router-dom'
-import { search, getClubs } from '../api/client'
-import { getImageFallback } from '../api/utils'
-
-const COMPETITION_CODES = {
-  'premier': 'GB1', 'epl': 'GB1', 'premier league': 'GB1',
-  'bundesliga': 'L1', 'ligue 1': 'FR1', 'serie a': 'IT1', 'la liga': 'ES1',
-  'champions league': 'CL', 'europa league': 'EL'
-}
+import { useEffect, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import { getClubs, getCompetition, search } from '../api/client'
+import { normalizeCompetition, searchKnownCompetitions } from '../api/competitionCatalog'
+import { isAbortError, mapWithConcurrency, uniqueBy } from '../api/utils'
+import { CardSkeletonGrid, EmptyState, ErrorState } from '../components/StateMessage'
 
 export default function CompetitionSearch() {
-  const [searchParams] = useSearchParams()
-  const [query, setQuery] = useState(searchParams.get('q') || '')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const navigate = useNavigate()
+  const q = searchParams.get('q')?.trim() || ''
+
+  const [query, setQuery] = useState(q)
   const [results, setResults] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
-  const navigate = useNavigate()
+  const [retryKey, setRetryKey] = useState(0)
 
-  const q = searchParams.get('q') || ''
+  useEffect(() => setQuery(q), [q])
 
-  const doSearch = useCallback(async () => {
-    if (!q) return
-    setLoading(true)
-    setError(null)
-    try {
-      const searchResult = await search(q)
-      const compIds = searchResult.competitionIds || []
-      const clubIds = searchResult.clubIds || []
-      const data = []
-      if (compIds.length) {
-        data.push(...compIds.map(id => ({ id, name: `Competition ${id}`, type: 'competition' })))
-      }
-      if (clubIds.length) {
-        const clubs = await getClubs(clubIds.slice(0, 20))
-        clubs.forEach(c => {
-          if (c.baseDetails?.primaryCompetitionId) {
-            data.push({
-              id: c.baseDetails.primaryCompetitionId,
-              name: `League from ${c.name}`,
-              type: 'competition',
-              code: c.baseDetails.primaryCompetitionId
-            })
-          }
-        })
-      }
-      const known = Object.entries(COMPETITION_CODES)
-        .filter(([name]) => q.toLowerCase().includes(name) || name.includes(q.toLowerCase()))
-        .map(([name, code]) => ({ id: code, name, type: 'competition', code }))
-      data.push(...known.filter(k => !data.some(d => d.code === k.code || d.id === k.id)))
-      setResults(data.length ? data : known.length ? known : [{ id: q.toUpperCase(), name: q, type: 'competition', code: q.toUpperCase() }])
-    } catch (e) {
-      setError(e.message)
-    } finally {
-      setLoading(false)
+  useEffect(() => {
+    if (!q) {
+      setResults([])
+      return undefined
     }
-  }, [q])
 
-  useEffect(() => { doSearch() }, [doSearch])
+    const controller = new AbortController()
 
-  function handleSearch(e) {
-    e.preventDefault()
-    if (!query.trim()) return
-    navigate(`/competitions?q=${encodeURIComponent(query.trim())}`)
+    async function loadCompetitions() {
+      setLoading(true)
+      setError(null)
+      try {
+        const knownMatches = searchKnownCompetitions(q)
+        const searchResult = await search(q, {
+          signal: controller.signal,
+          bypassCache: retryKey > 0
+        })
+
+        const clubProfiles = searchResult.clubIds?.length
+          ? await getClubs(searchResult.clubIds.slice(0, 20), { signal: controller.signal })
+          : []
+
+        const discoveredCodes = [
+          ...(searchResult.competitionIds || []),
+          ...clubProfiles.map(club => club.baseDetails?.primaryCompetitionId).filter(Boolean),
+          ...knownMatches.map(item => item.code)
+        ]
+
+        const uniqueCodes = [...new Set(discoveredCodes.map(code => String(code).toUpperCase()))].slice(0, 30)
+        const fetched = await mapWithConcurrency(
+          uniqueCodes,
+          5,
+          async code => {
+            try {
+              const competition = await getCompetition(code, { signal: controller.signal })
+              return normalizeCompetition(competition, code)
+            } catch (competitionError) {
+              if (isAbortError(competitionError)) throw competitionError
+              return normalizeCompetition(null, code)
+            }
+          },
+          controller.signal
+        )
+
+        const normalizedKnown = knownMatches.map(item => normalizeCompetition(item, item.code))
+        setResults(uniqueBy([...fetched, ...normalizedKnown], item => item.code))
+      } catch (loadError) {
+        if (!isAbortError(loadError)) setError(loadError.message)
+      } finally {
+        if (!controller.signal.aborted) setLoading(false)
+      }
+    }
+
+    loadCompetitions()
+    return () => controller.abort()
+  }, [q, retryKey])
+
+  function handleSearch(event) {
+    event.preventDefault()
+    const value = query.trim()
+    if (!value) return
+    setSearchParams({ q: value })
   }
 
   if (!q) {
     return (
-      <div className="search-section">
-        <h2>Search Competitions</h2>
-        <p>Find leagues and tournaments worldwide</p>
+      <section className="search-section">
+        <span className="eyebrow">Competition database</span>
+        <h1>Search competitions</h1>
+        <p>Find domestic leagues and international tournaments by name or code.</p>
         <form className="search-box" onSubmit={handleSearch}>
-          <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Competition name..." />
+          <input value={query} onChange={event => setQuery(event.target.value)} placeholder="Competition name…" aria-label="Competition name" />
           <button type="submit">Search</button>
         </form>
-      </div>
+      </section>
     )
   }
 
   return (
     <div>
-      <form className="search-box" onSubmit={handleSearch} style={{ marginBottom: 20 }}>
-        <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Competition name..." />
-        <button type="submit">Search</button>
-      </form>
-
-      <p style={{ marginBottom: 12, color: '#777' }}>Results for &ldquo;{q}&rdquo;</p>
-
-      {loading && <div className="loading"><div className="spinner" /></div>}
-      {error && <div className="error">{error}</div>}
-
-      <div className="card-grid">
-        {results.map((r, i) => (
-          <div key={i} className="card" onClick={() => navigate(`/competitions/${r.code || r.id}`)}>
-            <div className="card-body">
-              <div className="card-title">{r.name}</div>
-              <div className="card-subtitle">{r.type} · {r.code || r.id}</div>
-            </div>
-          </div>
-        ))}
+      <div className="page-heading">
+        <div>
+          <span className="eyebrow">Competition database</span>
+          <h1>Competition results</h1>
+        </div>
+        <form className="search-box compact" onSubmit={handleSearch}>
+          <input value={query} onChange={event => setQuery(event.target.value)} placeholder="Competition name…" aria-label="Competition name" />
+          <button type="submit">Search</button>
+        </form>
       </div>
+
+      <p className="result-summary">Results for <strong>“{q}”</strong></p>
+      {error && <ErrorState message={error} onRetry={() => setRetryKey(key => key + 1)} />}
+      {loading && <CardSkeletonGrid count={4} />}
+
+      {!loading && !error && results.length > 0 && (
+        <div className="card-grid competition-grid">
+          {results.map(competition => (
+            <article
+              key={competition.code}
+              className="card competition-card"
+              onClick={() => navigate(`/competitions/${competition.code}`)}
+            >
+              <div className="competition-code">{competition.code}</div>
+              <div className="card-content">
+                <h2>{competition.name}</h2>
+                <p>{competition.country || 'International competition'}</p>
+                <span className="text-link">View competition →</span>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+
+      {!loading && !error && results.length === 0 && (
+        <EmptyState title="No competitions found" message="Try a league name such as Premier League, Botola Pro, LaLiga or Champions League." />
+      )}
     </div>
   )
 }
