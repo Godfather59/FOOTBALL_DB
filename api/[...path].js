@@ -1,6 +1,7 @@
 const TARGETS = {
   tm: process.env.TMAPI_BASE_URL || 'https://tmapi-alpha.transfermarkt.technology',
-  ce: process.env.TRANSFERMARKT_CEAPI_BASE_URL || 'https://www.transfermarkt.com.tr/ceapi'
+  ce: process.env.TRANSFERMARKT_CEAPI_BASE_URL || 'https://www.transfermarkt.com.tr/ceapi',
+  af: process.env.API_FOOTBALL_BASE_URL || 'https://v3.football.api-sports.io'
 }
 
 const ALLOWED_METHODS = new Set(['GET', 'HEAD'])
@@ -20,6 +21,9 @@ export default async function handler(req, res) {
   if (!targetBase || endpointParts.length === 0) {
     return res.status(404).json({ message: 'Unknown football data endpoint' })
   }
+  if (source === 'af' && !process.env.API_FOOTBALL_KEY) {
+    return res.status(503).json({ message: 'API-Football is not configured. Add API_FOOTBALL_KEY to the server environment.' })
+  }
 
   const targetUrl = new URL(`${targetBase.replace(/\/$/, '')}/${endpointParts.map(encodeURIComponent).join('/')}`)
   for (const [key, value] of Object.entries(req.query)) {
@@ -29,22 +33,20 @@ export default async function handler(req, res) {
   }
 
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 12_000)
+  const timeout = setTimeout(() => controller.abort(), 15_000)
 
   try {
-    const upstream = await fetch(targetUrl, {
-      method: req.method,
-      headers: {
-        Accept: 'application/json',
-        'User-Agent': 'FOOTBALL_DB/1.0'
-      },
-      signal: controller.signal
-    })
-
+    const headers = { Accept: 'application/json', 'User-Agent': 'FOOTBALL_DB/1.0' }
+    if (source === 'af') headers['x-apisports-key'] = process.env.API_FOOTBALL_KEY
+    const upstream = await fetch(targetUrl, { method: req.method, headers, signal: controller.signal })
     const body = await upstream.arrayBuffer()
     const contentType = upstream.headers.get('content-type') || 'application/json; charset=utf-8'
     res.setHeader('Content-Type', contentType)
-    res.setHeader('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=1800')
+    res.setHeader('Cache-Control', source === 'af' ? 'public, s-maxage=21600, stale-while-revalidate=86400' : 'public, s-maxage=300, stale-while-revalidate=1800')
+    for (const name of ['x-ratelimit-requests-limit', 'x-ratelimit-requests-remaining', 'x-ratelimit-limit', 'x-ratelimit-remaining']) {
+      const value = upstream.headers.get(name)
+      if (value) res.setHeader(name, value)
+    }
     return res.status(upstream.status).send(Buffer.from(body))
   } catch (error) {
     const timedOut = error?.name === 'AbortError'
