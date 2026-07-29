@@ -2,24 +2,25 @@
 
 A responsive football data and recruitment workspace for players, clubs and competitions. It combines search and profile exploration with shortlists, scouting, comparisons, rankings, transfer analysis, squad planning and estimated transfer-fit tools.
 
-## Features
+## Zero-key operation
 
-### Multi-provider free data
+Football DB now runs without creating API accounts, copying tokens or adding private environment variables.
 
-- Automatic free scouting fallback: API-Football → OpenLigaDB where compatible
-- Free Data Hub for provider-specific tables, fixtures, scorer lists, team/player metadata and historical open matches
-- API-Football league-and-season player statistics without requiring a player name
-- football-data.org free competition standings and fixture schedules
-- TheSportsDB public v1 metadata, images, player/team search and country league lists
-- OpenLigaDB no-key league discovery, standings, matches and goal scorers
-- StatsBomb Open Data competition-season and historical match browser
-- Provider capability labels so missing assists, minutes, values or contracts are never estimated
-- Same-origin development and Vercel proxies with caching, timeouts and server-side key protection
+### No-key data sources
 
-### Recruitment suite
+- **No-key league scouting:** competition and squad discovery through the existing market-profile and statistics sources
+- **No-key keyword scouting:** player, club, league, country and position search with market values, contracts and career statistics when returned upstream
+- **TheSportsDB public v1:** team/player metadata, images and country league discovery through its built-in public access
+- **OpenLigaDB:** no-key league discovery, tables, matches, results and goal scorers
+- **StatsBomb Open Data:** historical competition seasons and match datasets for research and analysis
+- Provider capability labels ensure missing assists, minutes, values or contracts are displayed as unavailable rather than estimated
 
-- Goals, assists, appearances, minutes, age, position and rating filters when supplied by the selected provider
-- Legacy keyword scouting for market values, contracts and wider career periods
+The application does not use API-Football or football-data.org and does not request their keys.
+
+## Recruitment suite
+
+- Competition scouting without requiring an exact player name
+- Goals, assists, appearances, minutes, age, position, value and contract filters when returned by the selected source
 - Player comparison for two to four targets
 - Similar-player discovery with adjustable position, age, value, output and preferred-foot weights
 - Advanced shortlist folders with notes, ratings, priorities and recruitment status
@@ -32,18 +33,14 @@ A responsive football data and recruitment workspace for players, clubs and comp
 
 ## Supported providers
 
-| Provider | Private key | Best free use | Important limitation |
+| Provider | User key | Best use | Important limitation |
 |---|---|---|---|
-| API-Football | `API_FOOTBALL_KEY` | Detailed league player statistics | Free daily quota and limited historical seasons |
-| football-data.org | `FOOTBALL_DATA_TOKEN` | Selected competition fixtures and tables | Scorers, squads and deeper data are not used because they are outside the free basic tier |
-| TheSportsDB | None | Team/player metadata, images and basic schedules | Public v1 responses and list sizes are limited |
-| OpenLigaDB | None | Community fixtures, results, tables and goal scorers | Coverage is strongest for German competitions; scorer feed has goals only |
+| Market profile and statistics sources | None | Profiles, values, contracts, transfers and scouting | Unofficial and dependent on upstream coverage |
+| TheSportsDB public v1 | None | Team/player metadata, images and league lists | Free responses and list sizes are limited |
+| OpenLigaDB | None | Community fixtures, results, tables and goal scorers | Coverage is strongest for German competitions; scorer data has goals only |
 | StatsBomb Open Data | None | Historical research matches and event datasets | Selected historical datasets, not comprehensive live coverage |
-| Market profile source | None configured by this project | Values, contracts and transfer histories | Unofficial, keyword-dependent coverage |
 
-The application integrates the major stable free providers above rather than claiming to include every experimental or abandoned football API on the internet.
-
-The application does not merge provider IDs. External results use **Find market profile** rather than assuming that an API-Football, TheSportsDB or OpenLigaDB ID matches a market-profile ID.
+Provider IDs are never merged automatically. External results use **Find market profile** rather than assuming unrelated IDs represent the same player.
 
 Transfer-fit and similarity scores are transparent decision-support estimates, not predictions of real transfers or guarantees of sporting performance.
 
@@ -54,38 +51,26 @@ Browser
   └── /api/{provider}/*
         ├── Vite development proxies
         └── Vercel serverless proxy in production
-              ├── tm / ce   Market profiles, values and contracts
-              ├── af        API-Football
-              ├── fd        football-data.org
+              ├── tm / ce   Market profiles, values, contracts and statistics
               ├── tsdb      TheSportsDB public v1
               ├── oldb      OpenLigaDB
               └── sb        StatsBomb Open Data JSON
 ```
 
-Private keys are attached only by the development or production proxy and are never exposed through `VITE_` browser variables. Browser-side shortlists and squad plans are stored in `localStorage`.
+Browser-side shortlists and squad plans are stored in `localStorage`. Provider responses are cached and stale requests are cancelled.
 
 ## Local development
 
 Requirements: Node.js 22 or newer.
-
-The no-key providers work immediately:
 
 ```bash
 npm install
 npm run dev
 ```
 
-To unlock the optional key-based free providers:
+No `.env.local` file is required.
 
-1. Copy `.env.example` to `.env.local`.
-2. Set one or both values:
-
-```env
-API_FOOTBALL_KEY=your_api_football_key
-FOOTBALL_DATA_TOKEN=your_football_data_token
-```
-
-3. Restart `npm run dev` after changing environment variables.
+`.env.example` contains only optional base-URL overrides for development or self-hosting. It contains no private-key variables.
 
 ## Validation
 
@@ -103,7 +88,6 @@ The repository includes Vercel configuration and a catch-all serverless proxy un
 
 1. Import the repository into Vercel.
 2. Keep Vite as the detected framework.
-3. Optionally add `API_FOOTBALL_KEY` and `FOOTBALL_DATA_TOKEN` as server environment variables.
-4. Deploy. TheSportsDB, OpenLigaDB and StatsBomb Open Data remain usable without private keys.
+3. Deploy without adding environment variables.
 
-This project is not affiliated with or endorsed by Transfermarkt, API-Football, football-data.org, TheSportsDB, OpenLigaDB, StatsBomb or Hudl. Review each upstream provider’s terms, attribution requirements, availability and acceptable-use rules before operating a public service.
+This project is not affiliated with or endorsed by Transfermarkt, TheSportsDB, OpenLigaDB, StatsBomb or Hudl. Review each upstream provider’s terms, attribution requirements, availability and acceptable-use rules before operating a public service.
