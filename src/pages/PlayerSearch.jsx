@@ -1,271 +1,101 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
-import { useSearchParams, useNavigate } from 'react-router-dom'
-import { search, getPlayers, getPlayerStatsByCompetition } from '../api/client'
-import { formatMarketValue, getPositionName, getImageFallback, getClubFromAssignments } from '../api/utils'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import { getPlayers, getPlayerStatsByCompetition, search } from '../api/client'
+import { formatMarketValue, getClubFromAssignments, getClubName, getContractOpportunity, getImageFallback, getPositionName, isAbortError, mapWithConcurrency, parsePositiveInt, summarizePerformances } from '../api/utils'
+import Pagination from '../components/Pagination'
+import WatchlistButton from '../components/WatchlistButton'
+import { CardSkeletonGrid, EmptyState, ErrorState } from '../components/StateMessage'
+
+const PAGE_SIZE = 20
 
 export default function PlayerSearch() {
-  const [searchParams] = useSearchParams()
-  const [query, setQuery] = useState(searchParams.get('q') || '')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const navigate = useNavigate()
+  const q = searchParams.get('q')?.trim() || ''
+  const requestedPage = parsePositiveInt(searchParams.get('page'), 1)
+  const [query, setQuery] = useState(q)
   const [players, setPlayers] = useState([])
-  const [total, setTotal] = useState(0)
+  const [availableIds, setAvailableIds] = useState([])
+  const [reportedTotal, setReportedTotal] = useState(0)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
-  const navigate = useNavigate()
-
-  const [filters, setFilters] = useState({
-    name: '', position: '', minAge: '', maxAge: '', minValue: '', maxValue: '',
-    minGoals: '', minAssists: '', clubName: ''
-  })
+  const [retryKey, setRetryKey] = useState(0)
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [playerStats, setPlayerStats] = useState({})
   const [loadingStats, setLoadingStats] = useState(false)
+  const [filters, setFilters] = useState({ name: '', position: '', minAge: '', maxAge: '', minValue: '', maxValue: '', minGoals: '', minAssists: '', clubName: '' })
 
-  const q = searchParams.get('q') || ''
-
-  const doSearch = useCallback(async () => {
-    if (!q) return
-    setLoading(true)
-    setError(null)
-    setPlayerStats({})
-    try {
-      const searchResult = await search(q)
-      const ids = searchResult.playerIds.slice(0, 20)
-      setTotal(searchResult.totalCount?.players || ids.length)
-      if (ids.length > 0) {
-        const profs = await getPlayers(ids)
-        setPlayers(profs)
-      } else {
-        setPlayers([])
-      }
-    } catch (e) {
-      setError(e.message)
-    } finally {
-      setLoading(false)
-    }
-  }, [q])
-
-  useEffect(() => { doSearch() }, [doSearch])
+  useEffect(() => setQuery(q), [q])
+  const pageCount = Math.max(1, Math.ceil(availableIds.length / PAGE_SIZE))
+  const page = Math.min(requestedPage, pageCount)
 
   useEffect(() => {
-    if (!showAdvanced || players.length === 0) return
-    setLoadingStats(true)
-    const statsMap = {}
-    Promise.allSettled(
-      players.map(p =>
-        getPlayerStatsByCompetition(p.id)
-          .then(data => {
-            const total = (data.performances || []).reduce((acc, perf) => ({
-              goals: acc.goals + (perf.goalsScored || 0),
-              assists: acc.assists + (perf.assists || 0)
-            }), { goals: 0, assists: 0 })
-            statsMap[p.id] = total
-          })
-          .catch(() => {})
-      )
-    ).then(() => {
-      setPlayerStats(statsMap)
-      setLoadingStats(false)
-    })
+    if (!q) { setPlayers([]); setAvailableIds([]); setReportedTotal(0); return undefined }
+    const controller = new AbortController()
+    async function loadPlayers() {
+      setLoading(true); setError(null); setPlayerStats({})
+      try {
+        const result = await search(q, { signal: controller.signal, bypassCache: retryKey > 0 })
+        const ids = result.playerIds || []
+        const nextPageCount = Math.max(1, Math.ceil(ids.length / PAGE_SIZE))
+        const safePage = Math.min(requestedPage, nextPageCount)
+        const pageIds = ids.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
+        const profiles = pageIds.length ? await getPlayers(pageIds, { signal: controller.signal, bypassCache: retryKey > 0 }) : []
+        setAvailableIds(ids); setReportedTotal(result.totalCount?.players || ids.length); setPlayers(Array.isArray(profiles) ? profiles : [])
+        if (safePage !== requestedPage) setSearchParams({ q, page: String(safePage) }, { replace: true })
+      } catch (loadError) { if (!isAbortError(loadError)) setError(loadError.message) }
+      finally { if (!controller.signal.aborted) setLoading(false) }
+    }
+    loadPlayers()
+    return () => controller.abort()
+  }, [q, requestedPage, retryKey, setSearchParams])
+
+  useEffect(() => {
+    if (!showAdvanced || players.length === 0) { setLoadingStats(false); return undefined }
+    const controller = new AbortController(); setLoadingStats(true)
+    mapWithConcurrency(players, 4, async player => {
+      try { return [player.id, summarizePerformances(await getPlayerStatsByCompetition(player.id, { signal: controller.signal }))] }
+      catch (statsError) { if (isAbortError(statsError)) throw statsError; return [player.id, null] }
+    }, controller.signal).then(entries => { if (!controller.signal.aborted) setPlayerStats(Object.fromEntries(entries)) })
+      .catch(statsError => { if (!isAbortError(statsError)) console.error('Player statistics failed', statsError) })
+      .finally(() => { if (!controller.signal.aborted) setLoadingStats(false) })
+    return () => controller.abort()
   }, [showAdvanced, players])
 
-  const positions = useMemo(() => {
-    const set = new Set()
-    players.forEach(p => {
-      const pos = getPositionName(p.attributes?.position)
-      if (pos) set.add(pos)
-    })
-    return [...set].sort()
-  }, [players])
+  const positions = useMemo(() => [...new Set(players.map(player => getPositionName(player.attributes?.position)).filter(Boolean))].sort(), [players])
+  const filteredPlayers = useMemo(() => players.filter(player => {
+    const club = getClubFromAssignments(player.clubAssignments)
+    const stats = playerStats[player.id]
+    const age = player.lifeDates?.age
+    const marketValue = player.marketValueDetails?.current?.value
+    if (filters.name && !String(player.name || '').toLowerCase().includes(filters.name.toLowerCase())) return false
+    if (filters.clubName && !getClubName(club).toLowerCase().includes(filters.clubName.toLowerCase())) return false
+    if (filters.position && getPositionName(player.attributes?.position) !== filters.position) return false
+    if (filters.minAge && (age == null || age < Number(filters.minAge))) return false
+    if (filters.maxAge && (age == null || age > Number(filters.maxAge))) return false
+    if (filters.minValue && (marketValue == null || marketValue < Number(filters.minValue) * 1_000_000)) return false
+    if (filters.maxValue && (marketValue == null || marketValue > Number(filters.maxValue) * 1_000_000)) return false
+    if (showAdvanced && filters.minGoals && (!stats || stats.goals < Number(filters.minGoals))) return false
+    if (showAdvanced && filters.minAssists && (!stats || stats.assists < Number(filters.minAssists))) return false
+    return true
+  }), [players, filters, showAdvanced, playerStats])
 
-  const filteredPlayers = useMemo(() => {
-    return players.filter(p => {
-      if (filters.name) {
-        const n = filters.name.toLowerCase()
-        if (!p.name.toLowerCase().includes(n)) return false
-      }
-      if (filters.position) {
-        if (getPositionName(p.attributes?.position) !== filters.position) return false
-      }
-      if (filters.minAge || filters.maxAge) {
-        const age = p.lifeDates?.age
-        if (age == null) return false
-        if (filters.minAge && age < Number(filters.minAge)) return false
-        if (filters.maxAge && age > Number(filters.maxAge)) return false
-      }
-      if (filters.minValue || filters.maxValue) {
-        const val = p.marketValueDetails?.current?.value
-        if (val == null) return false
-        if (filters.minValue && val < Number(filters.minValue) * 1000000) return false
-        if (filters.maxValue && val > Number(filters.maxValue) * 1000000) return false
-      }
-      if (filters.clubName) {
-        const term = filters.clubName.toLowerCase()
-        const club = getClubFromAssignments(p.clubAssignments)
-        if (!club || !String(club.clubId).includes(term)) return false
-      }
-      if (showAdvanced && (filters.minGoals || filters.minAssists)) {
-        const stats = playerStats[p.id]
-        if (!stats) return false
-        if (filters.minGoals && (stats.goals || 0) < Number(filters.minGoals)) return false
-        if (filters.minAssists && (stats.assists || 0) < Number(filters.minAssists)) return false
-      }
-      return true
-    })
-  }, [players, filters, showAdvanced, playerStats])
+  const setFilter = useCallback((key, value) => setFilters(previous => ({ ...previous, [key]: value })), [])
+  function handleSearch(event) { event.preventDefault(); if (query.trim()) setSearchParams({ q: query.trim(), page: '1' }) }
+  function handlePageChange(nextPage) { const next = new URLSearchParams(searchParams); next.set('page', String(nextPage)); setSearchParams(next); window.scrollTo({ top: 0, behavior: 'smooth' }) }
 
-  function handleSearch(e) {
-    e.preventDefault()
-    if (!query.trim()) return
-    navigate(`/players?q=${encodeURIComponent(query.trim())}`)
-  }
-
-  function setFilter(key, value) {
-    setFilters(prev => ({ ...prev, [key]: value }))
-  }
-
-  if (!q) {
-    return (
-      <div className="search-section">
-        <h2>Search Players</h2>
-        <p>Find any footballer in the world</p>
-        <form className="search-box" onSubmit={handleSearch}>
-          <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Player name..." />
-          <button type="submit">Search</button>
-        </form>
-      </div>
-    )
-  }
+  if (!q) return <section className="search-section"><span className="eyebrow">Player database</span><h1>Search players</h1><p>Find profiles, market values, transfers and career statistics.</p><form className="search-box" onSubmit={handleSearch}><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Player name…" aria-label="Player name" /><button>Search</button></form></section>
 
   return (
     <div>
-      <form className="search-box" onSubmit={handleSearch} style={{ marginBottom: 16 }}>
-        <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Player name..." />
-        <button type="submit">Search</button>
-      </form>
-
-      <p style={{ marginBottom: 12, color: '#777' }}>Results for &ldquo;{q}&rdquo; — {total} found{filteredPlayers.length < players.length ? ` (${filteredPlayers.length} shown)` : ''}</p>
-
-      {loading && <div className="loading"><div className="spinner" /></div>}
-      {error && <div className="error">{error}</div>}
-
-      {!loading && !error && players.length > 0 && (
-        <>
-          <div style={{ background: '#fff', borderRadius: 12, padding: 16, marginBottom: 16, boxShadow: '0 2px 8px rgba(0,0,0,0.08)' }}>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-              <input
-                placeholder="Name"
-                value={filters.name}
-                onChange={e => setFilter('name', e.target.value)}
-                style={inputStyle}
-              />
-              <select value={filters.position} onChange={e => setFilter('position', e.target.value)} style={inputStyle}>
-                <option value="">All positions</option>
-                {positions.map(pos => <option key={pos} value={pos}>{pos}</option>)}
-              </select>
-              <input
-                placeholder="Min age"
-                type="number" min="0" max="50"
-                value={filters.minAge}
-                onChange={e => setFilter('minAge', e.target.value)}
-                style={{ ...inputStyle, width: 80 }}
-              />
-              <input
-                placeholder="Max age"
-                type="number" min="0" max="50"
-                value={filters.maxAge}
-                onChange={e => setFilter('maxAge', e.target.value)}
-                style={{ ...inputStyle, width: 80 }}
-              />
-              <input
-                placeholder="Min value (€M)"
-                type="number" min="0"
-                value={filters.minValue}
-                onChange={e => setFilter('minValue', e.target.value)}
-                style={{ ...inputStyle, width: 130 }}
-              />
-              <input
-                placeholder="Max value (€M)"
-                type="number" min="0"
-                value={filters.maxValue}
-                onChange={e => setFilter('maxValue', e.target.value)}
-                style={{ ...inputStyle, width: 130 }}
-              />
-            </div>
-
-            <div style={{ marginTop: 8 }}>
-              <label style={{ cursor: 'pointer', fontSize: 14, color: 'var(--primary)', fontWeight: 600 }}>
-                <input type="checkbox" checked={showAdvanced} onChange={e => setShowAdvanced(e.target.checked)} />
-                {' '}Advanced stats (goals / assists)
-              </label>
-            </div>
-
-            {showAdvanced && (
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 8 }}>
-                <input
-                  placeholder="Min goals"
-                  type="number" min="0"
-                  value={filters.minGoals}
-                  onChange={e => setFilter('minGoals', e.target.value)}
-                  style={{ ...inputStyle, width: 100 }}
-                />
-                <input
-                  placeholder="Min assists"
-                  type="number" min="0"
-                  value={filters.minAssists}
-                  onChange={e => setFilter('minAssists', e.target.value)}
-                  style={{ ...inputStyle, width: 100 }}
-                />
-                {loadingStats && <span style={{ fontSize: 13, color: '#777' }}>Fetching stats...</span>}
-              </div>
-            )}
-          </div>
-
-          <div className="card-grid">
-            {filteredPlayers.map(p => {
-              const club = getClubFromAssignments(p.clubAssignments)
-              const stats = playerStats[p.id]
-              return (
-                <div key={p.id} className="card" onClick={() => navigate(`/players/${p.id}`)}>
-                  <div style={{ display: 'flex', padding: 12, gap: 12 }}>
-                    <img
-                      src={p.portraitUrl}
-                      alt={p.name}
-                      style={{ width: 64, height: 64, borderRadius: 8, objectFit: 'cover' }}
-                      onError={getImageFallback}
-                    />
-                    <div style={{ flex: 1 }}>
-                      <div className="card-title">{p.name}</div>
-                      <div className="card-subtitle">{getPositionName(p.attributes?.position)}</div>
-                      <div className="card-detail">{p.lifeDates?.age} yrs</div>
-                      {showAdvanced && stats && (
-                        <div className="card-detail" style={{ fontWeight: 600, color: 'var(--primary)' }}>
-                          {stats.goals} goals / {stats.assists} assists
-                        </div>
-                      )}
-                      <div className="card-footer">
-                        <span className="card-price">{formatMarketValue(p.marketValueDetails?.current?.value)}</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-
-          {filteredPlayers.length === 0 && !loading && (
-            <p style={{ textAlign: 'center', color: '#777', marginTop: 40 }}>No players match your filters</p>
-          )}
-        </>
-      )}
+      <div className="page-heading"><div><span className="eyebrow">Player database</span><h1>Player results</h1></div><form className="search-box compact" onSubmit={handleSearch}><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Player name…" aria-label="Player name" /><button>Search</button></form></div>
+      <p className="result-summary">Results for <strong>“{q}”</strong> · {reportedTotal} reported{availableIds.length < reportedTotal && ` · ${availableIds.length} profiles exposed`}</p>
+      {error && <ErrorState message={error} onRetry={() => setRetryKey(key => key + 1)} />}{loading && <CardSkeletonGrid />}
+      {!loading && !error && players.length > 0 && <>
+        <section className="filter-panel"><div className="filter-grid"><label>Name<input value={filters.name} onChange={event => setFilter('name', event.target.value)} /></label><label>Club<input value={filters.clubName} onChange={event => setFilter('clubName', event.target.value)} /></label><label>Position<select value={filters.position} onChange={event => setFilter('position', event.target.value)}><option value="">All positions</option>{positions.map(position => <option key={position}>{position}</option>)}</select></label><label>Minimum age<input type="number" value={filters.minAge} onChange={event => setFilter('minAge', event.target.value)} /></label><label>Maximum age<input type="number" value={filters.maxAge} onChange={event => setFilter('maxAge', event.target.value)} /></label><label>Minimum value (€m)<input type="number" value={filters.minValue} onChange={event => setFilter('minValue', event.target.value)} /></label><label>Maximum value (€m)<input type="number" value={filters.maxValue} onChange={event => setFilter('maxValue', event.target.value)} /></label></div><label className="advanced-toggle"><input type="checkbox" checked={showAdvanced} onChange={event => setShowAdvanced(event.target.checked)} /> Load goals and assists {loadingStats && <span className="inline-loader">Loading…</span>}</label>{showAdvanced && <div className="advanced-filters"><label>Minimum goals<input type="number" value={filters.minGoals} onChange={event => setFilter('minGoals', event.target.value)} /></label><label>Minimum assists<input type="number" value={filters.minAssists} onChange={event => setFilter('minAssists', event.target.value)} /></label></div>}<p className="filter-note">For deeper multi-page filtering, use Advanced Scouting.</p></section>
+        {filteredPlayers.length > 0 ? <div className="card-grid">{filteredPlayers.map(player => { const club = getClubFromAssignments(player.clubAssignments); const stats = playerStats[player.id]; const opportunity = getContractOpportunity(player, 18); return <article key={player.id} className="card result-card" onClick={() => navigate(`/players/${player.id}`)}><img src={player.portraitUrl} alt="" onError={getImageFallback} /><div className="card-content"><h2>{player.name}</h2><p>{getPositionName(player.attributes?.position) || 'Position unavailable'}</p><div className="card-meta">{player.lifeDates?.age != null && <span>{player.lifeDates.age} years</span>}{getClubName(club) && <span>{getClubName(club)}</span>}</div>{showAdvanced && stats && <div className="performance-badge">{stats.goals} goals · {stats.assists} assists</div>}<div className="card-actions"><strong className="card-price">{formatMarketValue(player.marketValueDetails?.current?.value)}</strong>{['free-agent','expired','expiring'].includes(opportunity.type) && <span className={`opportunity-badge ${opportunity.type}`}>{opportunity.label}</span>}</div><div className="inline-card-buttons"><WatchlistButton player={player} compact /><button type="button" className="mini-button" onClick={event => { event.stopPropagation(); navigate(`/compare?ids=${player.id}`) }}>Compare</button></div></div></article> })}</div> : <EmptyState title="No players match these filters" message="Clear one or more filters to see the current page results." />}<Pagination page={page} pageCount={pageCount} onPageChange={handlePageChange} />
+      </>}
+      {!loading && !error && players.length === 0 && <EmptyState title="No players found" message="Try another spelling or a more complete player name." />}
     </div>
   )
-}
-
-const inputStyle = {
-  padding: '8px 12px',
-  border: '1px solid #ddd',
-  borderRadius: 8,
-  fontSize: 13,
-  outline: 'none',
-  background: '#fafafa'
 }

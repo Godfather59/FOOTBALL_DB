@@ -1,268 +1,76 @@
-import { useState, useEffect } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
-import { getPlayer, getPlayerMarketValue, getPlayerTransfers, getPlayerInjuries, getPlayerNationalCareer, getPlayerStatsByCompetition, getPlayerSeasonalStats } from '../api/client'
-import { formatMarketValue, formatDate, getImageFallback, getClubFromAssignments, getAge } from '../api/utils'
+import { useEffect, useMemo, useState } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
+import { getPlayer, getPlayerInjuries, getPlayerMarketValue, getPlayerNationalCareer, getPlayerSeasonalStats, getPlayerStatsByCompetition, getPlayerTransfers } from '../api/client'
+import { formatDate, formatMarketValue, getAge, getClubFromAssignments, getClubName, getContractOpportunity, getImageFallback, isAbortError } from '../api/utils'
+import MarketValueChart from '../components/MarketValueChart'
+import WatchlistButton from '../components/WatchlistButton'
+import { EmptyState, ErrorState, LoadingState } from '../components/StateMessage'
+
+const TABS = ['profile', 'market value', 'stats', 'transfers', 'injuries', 'national']
 
 export default function PlayerDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
   const [tab, setTab] = useState('profile')
-  const [profile, setProfile] = useState(null)
-  const [mv, setMv] = useState(null)
-  const [transfers, setTransfers] = useState(null)
-  const [injuries, setInjuries] = useState(null)
-  const [national, setNational] = useState(null)
-  const [statsByComp, setStatsByComp] = useState(null)
-  const [seasonalStats, setSeasonalStats] = useState(null)
+  const [data, setData] = useState({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [retryKey, setRetryKey] = useState(0)
 
   useEffect(() => {
-    setLoading(true)
-    setError(null)
-    Promise.allSettled([
-      getPlayer(id).catch(() => null),
-      getPlayerMarketValue(id).catch(() => null),
-      getPlayerTransfers(id).catch(() => null),
-      getPlayerInjuries(id).catch(() => null),
-      getPlayerNationalCareer(id).catch(() => null),
-      getPlayerStatsByCompetition(id).catch(e => { console.error('StatsByComp error:', e); return null }),
-      getPlayerSeasonalStats(id).catch(e => { console.error('SeasonalStats error:', e); return null })
-    ]).then(([pR, mvR, tR, iR, nR, scR, ssR]) => {
-      if (pR.status === 'rejected') throw new Error('Player not found')
-      setProfile(pR.value)
-      setMv(mvR.status === 'fulfilled' ? mvR.value : null)
-      setTransfers(tR.status === 'fulfilled' ? tR.value : null)
-      setInjuries(iR.status === 'fulfilled' ? iR.value : null)
-      setNational(nR.status === 'fulfilled' ? nR.value : null)
-      setStatsByComp(scR.status === 'fulfilled' ? scR.value : null)
-      setSeasonalStats(ssR.status === 'fulfilled' ? ssR.value : null)
-    }).catch(e => setError(e.message))
-      .finally(() => setLoading(false))
-  }, [id])
+    const controller = new AbortController()
+    async function loadPlayer() {
+      setLoading(true); setError(null)
+      const options = { signal: controller.signal, bypassCache: retryKey > 0 }
+      try {
+        const results = await Promise.allSettled([
+          getPlayer(id, options), getPlayerMarketValue(id, options), getPlayerTransfers(id, options),
+          getPlayerInjuries(id, options), getPlayerNationalCareer(id, options),
+          getPlayerStatsByCompetition(id, options), getPlayerSeasonalStats(id, undefined, options)
+        ])
+        const [profile, marketValue, transfers, injuries, national, statsByCompetition, seasonalStats] = results
+        if (profile.status === 'rejected' || !profile.value) throw profile.reason || new Error('Player not found')
+        setData({
+          profile: profile.value,
+          marketValue: marketValue.status === 'fulfilled' ? marketValue.value : null,
+          transfers: transfers.status === 'fulfilled' ? transfers.value : null,
+          injuries: injuries.status === 'fulfilled' ? injuries.value : null,
+          national: national.status === 'fulfilled' ? national.value : null,
+          statsByCompetition: statsByCompetition.status === 'fulfilled' ? statsByCompetition.value : null,
+          seasonalStats: seasonalStats.status === 'fulfilled' ? seasonalStats.value : null
+        })
+      } catch (loadError) { if (!isAbortError(loadError)) setError(loadError.message || 'Player not found') }
+      finally { if (!controller.signal.aborted) setLoading(false) }
+    }
+    loadPlayer(); return () => controller.abort()
+  }, [id, retryKey])
 
-  if (loading) return <div className="loading"><div className="spinner" /></div>
-  if (error) return <div className="error">{error}</div>
-  if (!profile) return null
+  const profile = data.profile
+  const club = profile ? getClubFromAssignments(profile.clubAssignments) : null
+  const age = profile?.lifeDates?.age ?? getAge(profile?.lifeDates?.dateOfBirth)
+  const competitionStats = data.statsByCompetition?.performances || []
+  const seasonalStats = useMemo(() => Array.isArray(data.seasonalStats) ? data.seasonalStats : data.seasonalStats?.performances || data.seasonalStats?.data || [], [data.seasonalStats])
+  const injuries = Array.isArray(data.injuries) ? data.injuries : data.injuries?.injuries || []
+  const national = Array.isArray(data.national) ? data.national : data.national?.teams || []
+  const marketHistory = Array.isArray(data.marketValue) ? data.marketValue : []
 
-  const p = profile
-  const club = getClubFromAssignments(p.clubAssignments)
-  const tabs = ['profile', 'market_value', 'stats', 'transfers', 'injuries', 'national']
+  if (loading) return <LoadingState label="Loading player profile…" />
+  if (error) return <ErrorState message={error} onRetry={() => setRetryKey(key => key + 1)} />
+  if (!profile) return <EmptyState title="Player not found" />
+  const opportunity = getContractOpportunity(profile, 18)
 
-  return (
-    <div>
-      <button onClick={() => navigate(-1)} style={{ background: 'none', border: 'none', cursor: 'pointer', marginBottom: 12, color: 'var(--primary)', fontWeight: 600 }}>&larr; Back</button>
-
-      <div className="player-header">
-        <img src={p.portraitUrl} alt={p.name} onError={getImageFallback} />
-        <div>
-          <h2>{p.name}</h2>
-          <div className="player-meta">
-            {p.attributes?.position && <span className="accent-badge">{p.attributes.position.name}</span>}
-            {p.lifeDates?.age && <span>{p.lifeDates.age} years</span>}
-            {club?.shirtNumber && <span>#{club.shirtNumber}</span>}
-            {p.attributes?.preferredFoot && <span>{p.attributes.preferredFoot.name} foot</span>}
-            {p.attributes?.height && <span>{p.attributes.height}m</span>}
-          </div>
-          {club && (
-            <p style={{ marginTop: 8 }}>
-              <strong>{club.clubName || club.name || 'Club'}</strong>
-              {club.startDate && <> · Joined {formatDate(club.startDate)}</>}
-              {club.contractEndDate && <> · Contract until {formatDate(club.contractEndDate)}</>}
-            </p>
-          )}
-          <p style={{ marginTop: 8 }}>
-            Market Value: <strong style={{ fontSize: 20 }}>{formatMarketValue(p.marketValueDetails?.current?.value)}</strong>
-          </p>
-        </div>
-      </div>
-
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
-        {tabs.map(t => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            style={{
-              padding: '8px 16px', borderRadius: 20, border: 'none', cursor: 'pointer',
-              fontWeight: 600, fontSize: 13,
-              background: tab === t ? 'var(--primary)' : 'var(--bg)',
-              color: tab === t ? '#fff' : 'var(--text)', transition: '0.2s'
-            }}
-          >
-            {t.replace(/_/g, ' ')}
-          </button>
-        ))}
-      </div>
-
-      {tab === 'profile' && (
-        <div className="section">
-          <h3>Profile</h3>
-          <div className="stat-group">
-            {p.lifeDates?.dateOfBirth && (
-              <div className="stat-item">
-                <div className="stat-value">{formatDate(p.lifeDates.dateOfBirth)}</div>
-                <div className="stat-label">Date of Birth</div>
-              </div>
-            )}
-            {p.lifeDates?.age && (
-              <div className="stat-item">
-                <div className="stat-value">{p.lifeDates.age}</div>
-                <div className="stat-label">Age</div>
-              </div>
-            )}
-            {p.attributes?.height && (
-              <div className="stat-item">
-                <div className="stat-value">{p.attributes.height}</div>
-                <div className="stat-label">Height (m)</div>
-              </div>
-            )}
-            <div className="stat-item">
-              <div className="stat-value">{formatMarketValue(p.marketValueDetails?.current?.value)}</div>
-              <div className="stat-label">Current Value</div>
-            </div>
-          </div>
-          {p.birthPlaceDetails?.placeOfBirth && (
-            <p><strong>Place of birth:</strong> {p.birthPlaceDetails.placeOfBirth}</p>
-          )}
-          {p.nationalityDetails?.nationalities && (
-            <p><strong>Nationalities:</strong> IDs: {p.nationalityDetails.nationalities.nationalityId}{p.nationalityDetails.nationalities.secondNationalityId ? `, ${p.nationalityDetails.nationalities.secondNationalityId}` : ''}</p>
-          )}
-          {p.attributes?.consultantAgency && (
-            <p><strong>Agent:</strong> {p.attributes.consultantAgency.name}</p>
-          )}
-          {p.attributes?.outfitter && (
-            <p><strong>Outfitter:</strong> {p.attributes.outfitter.name}</p>
-          )}
-        </div>
-      )}
-
-      {tab === 'market_value' && (
-        <div className="section">
-          <h3>Market Value History</h3>
-          {mv?.length > 0 ? (
-            <table className="table">
-              <thead><tr><th>Date</th><th>Value</th><th>Age</th><th>Club</th></tr></thead>
-              <tbody>
-                {mv.map((h, i) => (
-                  <tr key={i}>
-                    <td>{formatDate(h.date)}</td>
-                    <td style={{ fontWeight: 600 }}>{formatMarketValue(h.marketValue)}</td>
-                    <td>{h.age}</td>
-                    <td>{h.clubName}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : <p style={{ color: '#777' }}>No market value history available</p>}
-        </div>
-      )}
-
-      {tab === 'stats' && (
-        <div className="section">
-          <h3>Career Stats by Competition</h3>
-          {statsByComp?.performances?.length > 0 ? (
-            <table className="table">
-              <thead><tr><th>Competition</th><th>Apps</th><th>Goals</th><th>Assists</th><th>G+A</th></tr></thead>
-              <tbody>
-                {statsByComp.performances.map((p, i) => (
-                  <tr key={i}>
-                    <td style={{ fontWeight: 600 }}>{p.entity?.name || '-'}</td>
-                    <td>{p.gamesPlayed || 0}</td>
-                    <td>{p.goalsScored || 0}</td>
-                    <td>{p.assists || 0}</td>
-                    <td style={{ fontWeight: 700, color: 'var(--primary)' }}>{(p.goalsScored || 0) + (p.assists || 0)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : <p style={{ color: '#777' }}>No stats available</p>}
-
-          {seasonalStats?.length > 0 && (
-            <>
-              <h3 style={{ marginTop: 24 }}>Seasonal Breakdown</h3>
-              <table className="table">
-                <thead><tr><th>Season</th><th>Competition</th><th>Apps</th><th>Goals</th><th>Assists</th><th>G+A</th><th>Min</th></tr></thead>
-                <tbody>
-                  {seasonalStats.map((s, i) => (
-                    <tr key={i}>
-                      <td>{s.nameSeason || '-'}</td>
-                      <td>{s.competitionDescription || '-'}</td>
-                      <td>{s.gamesPlayed || 0}</td>
-                      <td>{s.goalsScored || 0}</td>
-                      <td>{s.assists || 0}</td>
-                      <td style={{ fontWeight: 700, color: 'var(--primary)' }}>{(s.goalsScored || 0) + (s.assists || 0)}</td>
-                      <td>{s.minutesPlayed || 0}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </>
-          )}
-        </div>
-      )}
-
-      {tab === 'transfers' && (
-        <div className="section">
-          <h3>Transfer History</h3>
-          {transfers?.transfers?.length > 0 ? (
-            <table className="table">
-              <thead><tr><th>Date</th><th>From</th><th>To</th><th>Fee</th><th>Season</th></tr></thead>
-              <tbody>
-                {transfers.transfers.map((t, i) => (
-                  <tr key={i}>
-                    <td>{formatDate(t.date)}</td>
-                    <td>{t.fromClub?.name || '-'}</td>
-                    <td>{t.toClub?.name || '-'}</td>
-                    <td style={{ fontWeight: 600 }}>{t.transferFee ? formatMarketValue(t.transferFee) : '-'}</td>
-                    <td>{t.seasonName || '-'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : <p style={{ color: '#777' }}>No transfer history available</p>}
-        </div>
-      )}
-
-      {tab === 'injuries' && (
-        <div className="section">
-          <h3>Injury History</h3>
-          {injuries?.length > 0 ? (
-            <table className="table">
-              <thead><tr><th>Injury</th><th>From</th><th>Until</th><th>Days</th></tr></thead>
-              <tbody>
-                {injuries.map((i, idx) => (
-                  <tr key={idx}>
-                    <td>{i.injuryName || i.injury || '-'}</td>
-                    <td>{formatDate(i.dateFrom || i.fromDate)}</td>
-                    <td>{formatDate(i.dateUntil || i.untilDate)}</td>
-                    <td>{i.days || '-'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : <p style={{ color: '#777' }}>No injury history available</p>}
-        </div>
-      )}
-
-      {tab === 'national' && (
-        <div className="section">
-          <h3>National Team Career</h3>
-          {national?.length > 0 ? (
-            <table className="table">
-              <thead><tr><th>Team</th><th>Appearances</th><th>Goals</th></tr></thead>
-              <tbody>
-                {national.map((n, i) => (
-                  <tr key={i}>
-                    <td>{n.teamName || n.team || '-'}</td>
-                    <td>{n.appearances || n.caps || '-'}</td>
-                    <td>{n.goals || '-'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : <p style={{ color: '#777' }}>No national team data available</p>}
-        </div>
-      )}
-    </div>
-  )
+  return <div>
+    <button className="back-button" onClick={() => navigate(-1)}>← Back</button>
+    <section className="profile-header"><img src={profile.portraitUrl} alt={profile.name} onError={getImageFallback} /><div className="profile-header-content"><span className="eyebrow">Player profile</span><h1>{profile.name}</h1><div className="profile-tags">{profile.attributes?.position?.name && <span>{profile.attributes.position.name}</span>}{age != null && <span>{age} years</span>}{club?.shirtNumber && <span>#{club.shirtNumber}</span>}{profile.attributes?.preferredFoot?.name && <span>{profile.attributes.preferredFoot.name} foot</span>}</div>{getClubName(club) && <p><strong>{getClubName(club)}</strong>{club.contractEndDate && ` · Contract until ${formatDate(club.contractEndDate)}`}</p>}<div className="headline-value">{formatMarketValue(profile.marketValueDetails?.current?.value)}</div><div className="profile-actions"><WatchlistButton player={profile} /><button className="secondary-button" onClick={() => navigate(`/compare?ids=${profile.id}`)}>Compare</button><button className="secondary-button" onClick={() => navigate(`/similar/${profile.id}`)}>Find similar</button><button className="secondary-button" onClick={() => navigate(`/fit/${profile.id}`)}>Transfer fit</button>{['free-agent','expired','expiring'].includes(opportunity.type) && <span className={`opportunity-badge ${opportunity.type}`}>{opportunity.label}</span>}</div></div></section>
+    <div className="tabs" role="tablist">{TABS.map(name => <button key={name} className={tab === name ? 'active' : ''} onClick={() => setTab(name)}>{name}</button>)}</div>
+    {tab === 'profile' && <section className="section"><h2>Profile</h2><div className="stat-group"><Stat value={formatDate(profile.lifeDates?.dateOfBirth)} label="Date of birth" /><Stat value={age ?? 'N/A'} label="Age" /><Stat value={profile.attributes?.height ? `${profile.attributes.height} m` : 'N/A'} label="Height" /><Stat value={formatMarketValue(profile.marketValueDetails?.current?.value)} label="Market value" /></div><div className="detail-list">{profile.birthPlaceDetails?.placeOfBirth && <p><strong>Place of birth</strong><span>{profile.birthPlaceDetails.placeOfBirth}</span></p>}{profile.attributes?.consultantAgency?.name && <p><strong>Agent</strong><span>{profile.attributes.consultantAgency.name}</span></p>}{profile.attributes?.outfitter?.name && <p><strong>Outfitter</strong><span>{profile.attributes.outfitter.name}</span></p>}</div></section>}
+    {tab === 'market value' && <><section className="section"><h2>Market value chart</h2>{marketHistory.length > 1 ? <MarketValueChart history={marketHistory} /> : <EmptyState title="Not enough chart data" />}</section><DataTable title="Market value history" rows={marketHistory} headers={['Date','Value','Age','Club']} renderRow={(item,index) => <tr key={`${item.date}-${index}`}><td>{formatDate(item.date)}</td><td><strong>{formatMarketValue(item.marketValue)}</strong></td><td>{item.age ?? '-'}</td><td>{item.clubName || '-'}</td></tr>} /></>}
+    {tab === 'stats' && <><DataTable title="Career statistics by competition" rows={competitionStats} headers={['Competition','Apps','Goals','Assists','G+A']} renderRow={(item,index) => <tr key={`${item.entity?.name}-${index}`}><td><strong>{item.entity?.name || '-'}</strong></td><td>{item.gamesPlayed || 0}</td><td>{item.goalsScored || 0}</td><td>{item.assists || 0}</td><td><strong>{Number(item.goalsScored || 0)+Number(item.assists || 0)}</strong></td></tr>} />{seasonalStats.length > 0 && <DataTable title="Seasonal breakdown" rows={seasonalStats} headers={['Season','Competition','Apps','Goals','Assists','Minutes']} renderRow={(item,index) => <tr key={`${item.nameSeason}-${index}`}><td>{item.nameSeason || '-'}</td><td>{item.competitionDescription || '-'}</td><td>{item.gamesPlayed || 0}</td><td>{item.goalsScored || 0}</td><td>{item.assists || 0}</td><td>{item.minutesPlayed || 0}</td></tr>} />}</>}
+    {tab === 'transfers' && <DataTable title="Transfer history" rows={data.transfers?.transfers || []} headers={['Date','From','To','Fee','Season']} renderRow={(item,index) => <tr key={`${item.date}-${index}`}><td>{formatDate(item.date)}</td><td>{item.fromClub?.name || '-'}</td><td>{item.toClub?.name || '-'}</td><td><strong>{item.transferFee ? formatMarketValue(item.transferFee) : '-'}</strong></td><td>{item.seasonName || '-'}</td></tr>} />}
+    {tab === 'injuries' && <DataTable title="Injury history" rows={injuries} headers={['Injury','From','Until','Days']} renderRow={(item,index) => <tr key={index}><td>{item.injuryName || item.injury || '-'}</td><td>{formatDate(item.dateFrom || item.fromDate)}</td><td>{formatDate(item.dateUntil || item.untilDate)}</td><td>{item.days || '-'}</td></tr>} />}
+    {tab === 'national' && <DataTable title="National team career" rows={national} headers={['Team','Appearances','Goals']} renderRow={(item,index) => <tr key={index}><td><strong>{item.teamName || item.team || '-'}</strong></td><td>{item.appearances ?? item.caps ?? '-'}</td><td>{item.goals ?? '-'}</td></tr>} />}
+  </div>
 }
+
+function Stat({ value, label }) { return <div className="stat-item"><div className="stat-value">{value}</div><div className="stat-label">{label}</div></div> }
+function DataTable({ title, rows, headers, renderRow }) { return <section className="section"><h2>{title}</h2>{rows.length > 0 ? <div className="table-scroll"><table className="table"><thead><tr>{headers.map(header => <th key={header}>{header}</th>)}</tr></thead><tbody>{rows.map(renderRow)}</tbody></table></div> : <EmptyState title="No data available" message={`No ${title.toLowerCase()} was returned for this player.`} />}</section> }

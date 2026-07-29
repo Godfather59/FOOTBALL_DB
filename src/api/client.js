@@ -1,99 +1,188 @@
-const BASE_URL = 'https://tmapi-alpha.transfermarkt.technology/'
-const HEADERS = { Accept: 'application/json' }
+const API_ROOT = '/api'
+const DEFAULT_CACHE_TTL = 5 * 60 * 1000
+const MEDIUM_CACHE_TTL = 30 * 60 * 1000
+const LONG_CACHE_TTL = 6 * 60 * 60 * 1000
+const DAILY_CACHE_TTL = 24 * 60 * 60 * 1000
+const requestCache = new Map()
 
-async function request(endpoint) {
-  const res = await fetch(`${BASE_URL}${endpoint}`, { headers: HEADERS })
+function makeUrl(source, endpoint) {
+  const cleanEndpoint = String(endpoint).replace(/^\/+/, '')
+  return `${API_ROOT}/${source}/${cleanEndpoint}`
+}
+
+function getCached(key) {
+  const cached = requestCache.get(key)
+  if (!cached) return null
+  if (cached.expiresAt <= Date.now()) {
+    requestCache.delete(key)
+    return null
+  }
+  return cached.value
+}
+
+function setCached(key, value, ttl) {
+  requestCache.set(key, { value, expiresAt: Date.now() + ttl })
+}
+
+async function parseResponse(res) {
+  const contentType = res.headers.get('content-type') || ''
+  if (contentType.includes('application/json')) return res.json()
+  const text = await res.text()
+  try {
+    return JSON.parse(text)
+  } catch {
+    return text
+  }
+}
+
+async function request(source, endpoint, options = {}) {
+  const { signal, cacheTtl = DEFAULT_CACHE_TTL, bypassCache = false } = options
+  const url = makeUrl(source, endpoint)
+  const cacheKey = `${source}:${endpoint}`
+
+  if (!bypassCache && cacheTtl > 0) {
+    const cached = getCached(cacheKey)
+    if (cached !== null) return cached
+  }
+
+  const res = await fetch(url, { headers: { Accept: 'application/json' }, signal })
+  const body = await parseResponse(res)
+
   if (!res.ok) {
-    let msg = `HTTP ${res.status}`
-    try { const b = await res.json(); if (b.message) msg += `: ${b.message}` } catch {}
-    throw new Error(msg)
+    const providerDetail = typeof body === 'object' ? body?.message || body?.error : ''
+    const detail = providerDetail ? `: ${providerDetail}` : ''
+    throw new Error(`Request failed (${res.status})${detail}`)
   }
-  const body = await res.json()
-  if (!body.success) throw new Error(body.message || 'API error')
-  return body.data
+
+  if (source === 'tm' && body?.success === false) {
+    throw new Error(body.message || 'Football data API error')
+  }
+
+  const data = source === 'tm' ? body?.data ?? body : body
+  if (!bypassCache && cacheTtl > 0) setCached(cacheKey, data, cacheTtl)
+  return data
 }
 
-export async function search(query) {
-  const data = await request(`quick-search?term=${encodeURIComponent(query)}`)
+export function clearApiCache() {
+  requestCache.clear()
+}
+
+export async function search(query, options = {}) {
+  const data = await request('tm', `quick-search?term=${encodeURIComponent(query)}`, options)
+  const result = data?.result || {}
   return {
-    playerIds: data.result.playerIds || [],
-    clubIds: data.result.clubIds || [],
-    competitionIds: data.result.competitionIds || [],
-    totalCount: data.totalCount
+    playerIds: result.playerIds || [],
+    clubIds: result.clubIds || [],
+    competitionIds: result.competitionIds || [],
+    totalCount: data?.totalCount || {}
   }
 }
 
-export async function getPlayers(ids) {
-  if (!ids.length) return []
-  const qs = ids.map(id => `ids[]=${id}`).join('&')
-  return request(`players?${qs}`)
+export async function getPlayers(ids, options = {}) {
+  if (!ids?.length) return []
+  const qs = ids.map(id => `ids[]=${encodeURIComponent(id)}`).join('&')
+  return request('tm', `players?${qs}`, options)
 }
 
-export async function getPlayer(id) {
-  return request(`player/${id}`)
+export function getPlayer(id, options = {}) {
+  return request('tm', `player/${encodeURIComponent(id)}`, options)
 }
 
-export async function getPlayerMarketValue(id) {
-  return request(`player/${id}/market-value-history`)
+export function getPlayerMarketValue(id, options = {}) {
+  return request('tm', `player/${encodeURIComponent(id)}/market-value-history`, options)
 }
 
-export async function getPlayerTransfers(id) {
-  return request(`transfer/history/player/${id}`)
+export function getPlayerTransfers(id, options = {}) {
+  return request('tm', `transfer/history/player/${encodeURIComponent(id)}`, options)
 }
 
-export async function getPlayerInjuries(id) {
-  return request(`player/${id}/injury`)
+export function getPlayerInjuries(id, options = {}) {
+  return request('tm', `player/${encodeURIComponent(id)}/injury`, options)
 }
 
-export async function getPlayerNationalCareer(id) {
-  return request(`player/${id}/national-career-history`)
+export function getPlayerNationalCareer(id, options = {}) {
+  return request('tm', `player/${encodeURIComponent(id)}/national-career-history`, options)
 }
 
-const CEAPI_BASE = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-  ? ''
-  : 'https://www.transfermarkt.com.tr'
-
-export async function getPlayerStatsByCompetition(id) {
-  const res = await fetch(`${CEAPI_BASE}/ceapi/player/${id}/performancepercompetition`, {
-    headers: { Accept: 'application/json' }
-  })
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  return res.json()
+export function getPlayerStatsByCompetition(id, options = {}) {
+  return request('ce', `player/${encodeURIComponent(id)}/performancepercompetition`, options)
 }
 
-export async function getPlayerSeasonalStats(id, season) {
-  const url = season
-    ? `${CEAPI_BASE}/ceapi/player/${id}/performance?season=${season}`
-    : `${CEAPI_BASE}/ceapi/player/${id}/performance`
-  const res = await fetch(url, {
-    headers: { Accept: 'application/json' }
-  })
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  return res.json()
+export function getPlayerSeasonalStats(id, season, options = {}) {
+  const seasonQuery = season ? `?season=${encodeURIComponent(season)}` : ''
+  return request('ce', `player/${encodeURIComponent(id)}/performance${seasonQuery}`, options)
 }
 
-export async function getClubs(ids) {
-  if (!ids.length) return []
-  const qs = ids.map(id => `ids[]=${id}`).join('&')
-  return request(`clubs?${qs}`)
+export async function getClubs(ids, options = {}) {
+  if (!ids?.length) return []
+  const qs = ids.map(id => `ids[]=${encodeURIComponent(id)}`).join('&')
+  return request('tm', `clubs?${qs}`, options)
 }
 
-export async function getClub(id) {
-  return request(`club/${id}`)
+export function getClub(id, options = {}) {
+  return request('tm', `club/${encodeURIComponent(id)}`, options)
 }
 
-export async function getClubSquad(id) {
-  return request(`club/${id}/squad`)
+export function getClubSquad(id, options = {}) {
+  return request('tm', `club/${encodeURIComponent(id)}/squad`, options)
 }
 
-export async function getClubStadium(id) {
-  return request(`club/${id}/stadium`)
+export function getClubStadium(id, options = {}) {
+  return request('tm', `club/${encodeURIComponent(id)}/stadium`, options)
 }
 
-export async function getCompetition(code) {
-  return request(`competition/${code}`)
+export function getCompetition(code, options = {}) {
+  return request('tm', `competition/${encodeURIComponent(code)}`, options)
 }
 
-export async function getCompetitionTable(code) {
-  return request(`competition/${code}/table`)
+export function getCompetitionTable(code, options = {}) {
+  return request('tm', `competition/${encodeURIComponent(code)}/table`, options)
+}
+
+export function searchSportsDbPlayers(query, options = {}) {
+  return request('tsdb', `searchplayers.php?p=${encodeURIComponent(query)}`, { cacheTtl: LONG_CACHE_TTL, ...options })
+}
+
+export function searchSportsDbTeams(query, options = {}) {
+  return request('tsdb', `searchteams.php?t=${encodeURIComponent(query)}`, { cacheTtl: LONG_CACHE_TTL, ...options })
+}
+
+export function getSportsDbLeagues(country, options = {}) {
+  const params = new URLSearchParams({ c: country, s: 'Soccer' })
+  return request('tsdb', `search_all_leagues.php?${params}`, { cacheTtl: DAILY_CACHE_TTL, ...options })
+}
+
+export function getSportsDbLeagueTable(leagueId, season, options = {}) {
+  const params = new URLSearchParams({ l: String(leagueId) })
+  if (season) params.set('s', String(season))
+  return request('tsdb', `lookuptable.php?${params}`, { cacheTtl: MEDIUM_CACHE_TTL, ...options })
+}
+
+export function getSportsDbTeamsByLeague(leagueName, options = {}) {
+  return request('tsdb', `search_all_teams.php?l=${encodeURIComponent(leagueName)}`, { cacheTtl: LONG_CACHE_TTL, ...options })
+}
+
+export function getOpenLigaAvailableLeagues(season, options = {}) {
+  const endpoint = season ? `getavailableleagues/${encodeURIComponent(season)}` : 'getavailableleagues'
+  return request('oldb', endpoint, { cacheTtl: DAILY_CACHE_TTL, ...options })
+}
+
+export function getOpenLigaGoalGetters(shortcut, season, options = {}) {
+  return request('oldb', `getgoalgetters/${encodeURIComponent(shortcut)}/${encodeURIComponent(season)}`, { cacheTtl: MEDIUM_CACHE_TTL, ...options })
+}
+
+export function getOpenLigaTable(shortcut, season, options = {}) {
+  return request('oldb', `getbltable/${encodeURIComponent(shortcut)}/${encodeURIComponent(season)}`, { cacheTtl: MEDIUM_CACHE_TTL, ...options })
+}
+
+export function getOpenLigaMatches(shortcut, season, options = {}) {
+  return request('oldb', `getmatchdata/${encodeURIComponent(shortcut)}/${encodeURIComponent(season)}`, { cacheTtl: MEDIUM_CACHE_TTL, ...options })
+}
+
+export function getStatsBombCompetitions(options = {}) {
+  return request('sb', 'competitions.json', { cacheTtl: DAILY_CACHE_TTL, ...options })
+}
+
+export function getStatsBombMatches(competitionId, seasonId, options = {}) {
+  return request('sb', `matches/${encodeURIComponent(competitionId)}/${encodeURIComponent(seasonId)}.json`, { cacheTtl: DAILY_CACHE_TTL, ...options })
 }
