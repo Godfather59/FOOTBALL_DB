@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router-dom'
 import { COMPETITIONS } from '../api/competitionCatalog'
 import {
   getFootballDataMatches,
-  getFootballDataScorers,
   getFootballDataStandings,
   getOpenLigaAvailableLeagues,
   getOpenLigaGoalGetters,
@@ -17,7 +16,6 @@ import {
 } from '../api/client'
 import {
   FREE_PROVIDERS,
-  normalizeFootballDataScorers,
   normalizeFootballDataStandings,
   normalizeOpenLigaGoalGetters,
   normalizeOpenLigaTable,
@@ -74,7 +72,7 @@ function statsBombMatches(payload) {
 }
 
 function providerModes(provider) {
-  if (provider === 'football-data') return [['standings', 'Standings'], ['scorers', 'Top scorers'], ['matches', 'Season matches']]
+  if (provider === 'football-data') return [['standings', 'Standings'], ['matches', 'Season matches']]
   if (provider === 'thesportsdb') return [['teams', 'Search teams'], ['players', 'Search players'], ['leagues', 'Leagues by country']]
   if (provider === 'openligadb') return [['leagues', 'Available leagues'], ['standings', 'Standings'], ['scorers', 'Goal scorers'], ['matches', 'Season matches']]
   if (provider === 'statsbomb-open') return [['competitions', 'Competition seasons'], ['matches', 'Historical matches']]
@@ -127,10 +125,6 @@ export default function DataHub() {
     try {
       if (provider === 'football-data') {
         if (mode === 'standings') setResult({ type: 'standings', rows: normalizeFootballDataStandings(await getFootballDataStandings(selectedCompetition.footballDataCode, season)) })
-        if (mode === 'scorers') {
-          const normalized = normalizeFootballDataScorers(await getFootballDataScorers(selectedCompetition.footballDataCode, season, 100), selectedCompetition, season)
-          setResult({ type: 'players', players: normalized.players, stats: normalized.stats })
-        }
         if (mode === 'matches') setResult({ type: 'matches', rows: footballDataMatches(await getFootballDataMatches(selectedCompetition.footballDataCode, season)) })
       }
       if (provider === 'thesportsdb') {
@@ -182,7 +176,7 @@ export default function DataHub() {
 
     <section className="provider-grid">{FREE_PROVIDERS.filter(item => !['auto-free', 'legacy-keyword'].includes(item.id)).map(item => <button type="button" className={`provider-card ${provider === item.id ? 'active' : ''}`} key={item.id} onClick={() => changeProvider(item.id)}><span className="provider-key">{item.keyRequirement}</span><h2>{item.name}</h2><p>{item.description}</p><small>{item.capabilities.join(' · ')}</small></button>)}</section>
 
-    {provider === 'api-football' ? <section className="filter-panel provider-intro"><h2>API-Football detailed scouting</h2><p>API-Football is already integrated into Advanced Scouting with league resolution, pagination, caching and automatic fallback. Its private key remains on the server.</p><button className="primary-button" type="button" onClick={() => navigate('/scout')}>Use API-Football scouting</button></section> : <form className="filter-panel provider-explorer" onSubmit={submit}>
+    {provider === 'api-football' ? <section className="filter-panel provider-intro"><h2>API-Football detailed scouting</h2><p>API-Football is integrated into Advanced Scouting with league resolution, pagination, caching and automatic fallback. Its private key remains on the server.</p><button className="primary-button" type="button" onClick={() => navigate('/scout')}>Use API-Football scouting</button></section> : <form className="filter-panel provider-explorer" onSubmit={submit}>
       <div className="section-heading"><span className="eyebrow">{providerInfo?.name}</span><h2>{providerInfo?.description}</h2></div>
       <div className="filter-grid">
         <label>Data type<select value={mode} onChange={event => { setMode(event.target.value); setResult(null) }}>{modes.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
@@ -192,12 +186,13 @@ export default function DataHub() {
         {provider === 'openligadb' && <><label>Season start year<input value={season} onChange={event => setSeason(event.target.value)} inputMode="numeric" /></label>{mode !== 'leagues' && <label>League shortcut<input value={shortcut} onChange={event => setShortcut(event.target.value)} placeholder="bl1" /></label>}</>}
         {provider === 'statsbomb-open' && mode === 'matches' && <label>Competition season<select value={statsBombSelection} onChange={event => setStatsBombSelection(event.target.value)}><option value="">Load first available dataset</option>{statsBombCatalog.map(item => <option key={item.id} value={item.id}>{item.name} · {item.seasonName}</option>)}</select></label>}
       </div>
+      {provider === 'statsbomb-open' && <p className="filter-note">StatsBomb Open Data is provided by StatsBomb/Hudl for research and education. Keep their attribution when publishing analysis.</p>}
       <button className="primary-button">Load free data</button>
     </form>}
 
     {loading && <LoadingState label="Loading provider data…" />}
     {error && <ErrorState message={error} />}
-    {!loading && !error && provider !== 'api-football' && !result && <EmptyState title="Choose a provider query" message="No-key providers work immediately. API-Football and football-data.org require their free server-side keys." />}
+    {!loading && !error && provider !== 'api-football' && !result && <EmptyState title="Choose a provider query" message="No-key providers work immediately. API-Football and football-data.org require their optional free server-side keys." />}
     {!loading && !error && result?.type === 'standings' && (result.rows.length ? <StandingsTable rows={result.rows} /> : <EmptyState title="No standings returned" />)}
     {!loading && !error && result?.type === 'matches' && (result.rows.length ? <MatchTable rows={result.rows} /> : <EmptyState title="No matches returned" />)}
     {!loading && !error && result?.type === 'players' && (result.players.length ? <PlayerRows players={result.players} stats={result.stats} onFindProfile={name => navigate(`/players?q=${encodeURIComponent(name)}`)} /> : <EmptyState title="No players returned" />)}
