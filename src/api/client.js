@@ -1,5 +1,7 @@
 const API_ROOT = '/api'
 const DEFAULT_CACHE_TTL = 5 * 60 * 1000
+const MEDIUM_CACHE_TTL = 30 * 60 * 1000
+const LONG_CACHE_TTL = 6 * 60 * 60 * 1000
 const DAILY_CACHE_TTL = 24 * 60 * 60 * 1000
 const requestCache = new Map()
 
@@ -54,7 +56,8 @@ async function request(source, endpoint, options = {}) {
   const body = await parseResponse(res)
 
   if (!res.ok) {
-    const detail = typeof body === 'object' && body?.message ? `: ${body.message}` : ''
+    const providerDetail = typeof body === 'object' ? body?.message || body?.error : ''
+    const detail = providerDetail ? `: ${providerDetail}` : ''
     throw new Error(`Request failed (${res.status})${detail}`)
   }
 
@@ -155,4 +158,72 @@ export function getApiFootballLeagues(searchTerm, season, options = {}) {
 export function getApiFootballPlayers(leagueId, season, page = 1, options = {}) {
   const params = new URLSearchParams({ league: String(leagueId), season: String(season), page: String(page) })
   return request('af', `players?${params}`, { cacheTtl: DAILY_CACHE_TTL, ...options })
+}
+
+export function getFootballDataCompetitions(options = {}) {
+  return request('fd', 'competitions', { cacheTtl: DAILY_CACHE_TTL, ...options })
+}
+
+export function getFootballDataStandings(code, season, options = {}) {
+  const params = season ? `?season=${encodeURIComponent(season)}` : ''
+  return request('fd', `competitions/${encodeURIComponent(code)}/standings${params}`, { cacheTtl: MEDIUM_CACHE_TTL, ...options })
+}
+
+export function getFootballDataScorers(code, season, limit = 100, options = {}) {
+  const params = new URLSearchParams({ limit: String(limit) })
+  if (season) params.set('season', String(season))
+  return request('fd', `competitions/${encodeURIComponent(code)}/scorers?${params}`, { cacheTtl: MEDIUM_CACHE_TTL, ...options })
+}
+
+export function getFootballDataMatches(code, season, options = {}) {
+  const params = season ? `?season=${encodeURIComponent(season)}` : ''
+  return request('fd', `competitions/${encodeURIComponent(code)}/matches${params}`, { cacheTtl: MEDIUM_CACHE_TTL, ...options })
+}
+
+export function searchSportsDbPlayers(query, options = {}) {
+  return request('tsdb', `searchplayers.php?p=${encodeURIComponent(query)}`, { cacheTtl: LONG_CACHE_TTL, ...options })
+}
+
+export function searchSportsDbTeams(query, options = {}) {
+  return request('tsdb', `searchteams.php?t=${encodeURIComponent(query)}`, { cacheTtl: LONG_CACHE_TTL, ...options })
+}
+
+export function getSportsDbLeagues(country, options = {}) {
+  const params = new URLSearchParams({ c: country, s: 'Soccer' })
+  return request('tsdb', `search_all_leagues.php?${params}`, { cacheTtl: DAILY_CACHE_TTL, ...options })
+}
+
+export function getSportsDbLeagueTable(leagueId, season, options = {}) {
+  const params = new URLSearchParams({ l: String(leagueId) })
+  if (season) params.set('s', String(season))
+  return request('tsdb', `lookuptable.php?${params}`, { cacheTtl: MEDIUM_CACHE_TTL, ...options })
+}
+
+export function getSportsDbTeamsByLeague(leagueName, options = {}) {
+  return request('tsdb', `search_all_teams.php?l=${encodeURIComponent(leagueName)}`, { cacheTtl: LONG_CACHE_TTL, ...options })
+}
+
+export function getOpenLigaAvailableLeagues(season, options = {}) {
+  const endpoint = season ? `getavailableleagues/${encodeURIComponent(season)}` : 'getavailableleagues'
+  return request('oldb', endpoint, { cacheTtl: DAILY_CACHE_TTL, ...options })
+}
+
+export function getOpenLigaGoalGetters(shortcut, season, options = {}) {
+  return request('oldb', `getgoalgetters/${encodeURIComponent(shortcut)}/${encodeURIComponent(season)}`, { cacheTtl: MEDIUM_CACHE_TTL, ...options })
+}
+
+export function getOpenLigaTable(shortcut, season, options = {}) {
+  return request('oldb', `getbltable/${encodeURIComponent(shortcut)}/${encodeURIComponent(season)}`, { cacheTtl: MEDIUM_CACHE_TTL, ...options })
+}
+
+export function getOpenLigaMatches(shortcut, season, options = {}) {
+  return request('oldb', `getmatchdata/${encodeURIComponent(shortcut)}/${encodeURIComponent(season)}`, { cacheTtl: MEDIUM_CACHE_TTL, ...options })
+}
+
+export function getStatsBombCompetitions(options = {}) {
+  return request('sb', 'competitions.json', { cacheTtl: DAILY_CACHE_TTL, ...options })
+}
+
+export function getStatsBombMatches(competitionId, seasonId, options = {}) {
+  return request('sb', `matches/${encodeURIComponent(competitionId)}/${encodeURIComponent(seasonId)}.json`, { cacheTtl: DAILY_CACHE_TTL, ...options })
 }
