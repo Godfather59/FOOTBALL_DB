@@ -1,9 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { COMPETITIONS } from '../api/competitionCatalog'
 import {
-  getFootballDataMatches,
-  getFootballDataStandings,
   getOpenLigaAvailableLeagues,
   getOpenLigaGoalGetters,
   getOpenLigaMatches,
@@ -16,7 +13,6 @@ import {
 } from '../api/client'
 import {
   FREE_PROVIDERS,
-  normalizeFootballDataStandings,
   normalizeOpenLigaGoalGetters,
   normalizeOpenLigaTable,
   normalizeSportsDbPlayers,
@@ -27,20 +23,7 @@ import { getImageFallback } from '../api/utils'
 import { EmptyState, ErrorState, LoadingState } from '../components/StateMessage'
 
 const DEFAULT_SEASON = String(new Date().getFullYear() - 1)
-const FOOTBALL_DATA_COMPETITIONS = COMPETITIONS.filter(item => item.footballDataCode)
-
-function footballDataMatches(payload) {
-  return (payload?.matches || []).map(match => ({
-    id: match.id,
-    date: match.utcDate,
-    competition: match.competition?.name || '',
-    home: match.homeTeam?.name || '',
-    away: match.awayTeam?.name || '',
-    homeScore: match.score?.fullTime?.home,
-    awayScore: match.score?.fullTime?.away,
-    status: match.status || ''
-  }))
-}
+const HUB_PROVIDER_IDS = ['thesportsdb', 'openligadb', 'statsbomb-open']
 
 function openLigaMatches(payload) {
   return (Array.isArray(payload) ? payload : []).map(match => {
@@ -72,7 +55,6 @@ function statsBombMatches(payload) {
 }
 
 function providerModes(provider) {
-  if (provider === 'football-data') return [['standings', 'Standings'], ['matches', 'Season matches']]
   if (provider === 'thesportsdb') return [['teams', 'Search teams'], ['players', 'Search players'], ['leagues', 'Leagues by country']]
   if (provider === 'openligadb') return [['leagues', 'Available leagues'], ['standings', 'Standings'], ['scorers', 'Goal scorers'], ['matches', 'Season matches']]
   if (provider === 'statsbomb-open') return [['competitions', 'Competition seasons'], ['matches', 'Historical matches']]
@@ -88,7 +70,10 @@ function MatchTable({ rows }) {
 }
 
 function PlayerRows({ players, stats, onFindProfile }) {
-  return <div className="provider-result-grid">{players.map(player => { const playerStats = stats?.[player.id] || {}; return <article className="provider-result-card" key={player.id}><div className="scout-card-top"><img src={player.portraitUrl} alt="" onError={getImageFallback} /><div><h2>{player.name}</h2><p>{player.attributes?.position?.name || 'Position unavailable'}</p><small>{player.clubAssignments?.[0]?.clubName || player.nationality || 'Metadata unavailable'}</small></div></div><div className="scout-metrics">{[['Apps', playerStats.appearances], ['Goals', playerStats.goals], ['Assists', playerStats.assists]].map(([label, value]) => <span key={label}>{label}<strong>{value ?? '-'}</strong></span>)}</div><button className="secondary-button" type="button" onClick={() => onFindProfile(player.name)}>Find market profile</button></article> })}</div>
+  return <div className="provider-result-grid">{players.map(player => {
+    const playerStats = stats?.[player.id] || {}
+    return <article className="provider-result-card" key={player.id}><div className="scout-card-top"><img src={player.portraitUrl} alt="" onError={getImageFallback} /><div><h2>{player.name}</h2><p>{player.attributes?.position?.name || 'Position unavailable'}</p><small>{player.clubAssignments?.[0]?.clubName || player.nationality || 'Metadata unavailable'}</small></div></div><div className="scout-metrics">{[['Apps', playerStats.appearances], ['Goals', playerStats.goals], ['Assists', playerStats.assists]].map(([label, value]) => <span key={label}>{label}<strong>{value ?? '-'}</strong></span>)}</div><button className="secondary-button" type="button" onClick={() => onFindProfile(player.name)}>Find market profile</button></article>
+  })}</div>
 }
 
 export default function DataHub() {
@@ -96,7 +81,6 @@ export default function DataHub() {
   const [provider, setProvider] = useState('thesportsdb')
   const [mode, setMode] = useState('teams')
   const [season, setSeason] = useState(DEFAULT_SEASON)
-  const [competitionCode, setCompetitionCode] = useState('GB1')
   const [query, setQuery] = useState('Raja Casablanca')
   const [country, setCountry] = useState('Morocco')
   const [shortcut, setShortcut] = useState('bl1')
@@ -106,7 +90,6 @@ export default function DataHub() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
 
-  const selectedCompetition = FOOTBALL_DATA_COMPETITIONS.find(item => item.code === competitionCode) || FOOTBALL_DATA_COMPETITIONS[0]
   const modes = providerModes(provider)
   const selectedStatsBomb = useMemo(() => statsBombCatalog.find(item => item.id === statsBombSelection), [statsBombCatalog, statsBombSelection])
 
@@ -123,10 +106,6 @@ export default function DataHub() {
     setError(null)
     setResult(null)
     try {
-      if (provider === 'football-data') {
-        if (mode === 'standings') setResult({ type: 'standings', rows: normalizeFootballDataStandings(await getFootballDataStandings(selectedCompetition.footballDataCode, season)) })
-        if (mode === 'matches') setResult({ type: 'matches', rows: footballDataMatches(await getFootballDataMatches(selectedCompetition.footballDataCode, season)) })
-      }
       if (provider === 'thesportsdb') {
         if (mode === 'teams') setResult({ type: 'teams', rows: normalizeSportsDbTeams(await searchSportsDbTeams(query.trim())) })
         if (mode === 'players') setResult({ type: 'players', players: normalizeSportsDbPlayers(await searchSportsDbPlayers(query.trim())), stats: {} })
@@ -171,28 +150,29 @@ export default function DataHub() {
   }
 
   const providerInfo = FREE_PROVIDERS.find(item => item.id === provider)
+  const providers = FREE_PROVIDERS.filter(item => HUB_PROVIDER_IDS.includes(item.id))
+
   return <div>
-    <div className="page-heading"><div><span className="eyebrow">No-cost data layer</span><h1>Free Data Hub</h1><p>Explore each provider only within the capabilities its free tier actually supplies.</p></div><button className="primary-button" type="button" onClick={() => navigate('/scout')}>Open scouting</button></div>
+    <div className="page-heading"><div><span className="eyebrow">Zero-configuration data layer</span><h1>Free Data Hub</h1><p>Every provider on this page works without creating an account, copying a token or editing an environment file.</p></div><button className="primary-button" type="button" onClick={() => navigate('/scout')}>Open scouting</button></div>
 
-    <section className="provider-grid">{FREE_PROVIDERS.filter(item => !['auto-free', 'legacy-keyword'].includes(item.id)).map(item => <button type="button" className={`provider-card ${provider === item.id ? 'active' : ''}`} key={item.id} onClick={() => changeProvider(item.id)}><span className="provider-key">{item.keyRequirement}</span><h2>{item.name}</h2><p>{item.description}</p><small>{item.capabilities.join(' · ')}</small></button>)}</section>
+    <section className="provider-grid">{providers.map(item => <button type="button" className={`provider-card ${provider === item.id ? 'active' : ''}`} key={item.id} onClick={() => changeProvider(item.id)}><span className="provider-key">{item.keyRequirement}</span><h2>{item.name}</h2><p>{item.description}</p><small>{item.capabilities.join(' · ')}</small></button>)}</section>
 
-    {provider === 'api-football' ? <section className="filter-panel provider-intro"><h2>API-Football detailed scouting</h2><p>API-Football is integrated into Advanced Scouting with league resolution, pagination, caching and automatic fallback. Its private key remains on the server.</p><button className="primary-button" type="button" onClick={() => navigate('/scout')}>Use API-Football scouting</button></section> : <form className="filter-panel provider-explorer" onSubmit={submit}>
+    <form className="filter-panel provider-explorer" onSubmit={submit}>
       <div className="section-heading"><span className="eyebrow">{providerInfo?.name}</span><h2>{providerInfo?.description}</h2></div>
       <div className="filter-grid">
         <label>Data type<select value={mode} onChange={event => { setMode(event.target.value); setResult(null) }}>{modes.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
-        {provider === 'football-data' && <><label>Competition<select value={competitionCode} onChange={event => setCompetitionCode(event.target.value)}>{FOOTBALL_DATA_COMPETITIONS.map(item => <option key={item.code} value={item.code}>{item.name} · {item.country}</option>)}</select></label><label>Season start year<input value={season} onChange={event => setSeason(event.target.value)} inputMode="numeric" /></label></>}
         {provider === 'thesportsdb' && mode !== 'leagues' && <label>Team or player name<input value={query} onChange={event => setQuery(event.target.value)} required /></label>}
         {provider === 'thesportsdb' && mode === 'leagues' && <label>Country<input value={country} onChange={event => setCountry(event.target.value)} required /></label>}
         {provider === 'openligadb' && <><label>Season start year<input value={season} onChange={event => setSeason(event.target.value)} inputMode="numeric" /></label>{mode !== 'leagues' && <label>League shortcut<input value={shortcut} onChange={event => setShortcut(event.target.value)} placeholder="bl1" /></label>}</>}
         {provider === 'statsbomb-open' && mode === 'matches' && <label>Competition season<select value={statsBombSelection} onChange={event => setStatsBombSelection(event.target.value)}><option value="">Load first available dataset</option>{statsBombCatalog.map(item => <option key={item.id} value={item.id}>{item.name} · {item.seasonName}</option>)}</select></label>}
       </div>
-      {provider === 'statsbomb-open' && <p className="filter-note">StatsBomb Open Data is provided by StatsBomb/Hudl for research and education. Keep their attribution when publishing analysis.</p>}
+      {provider === 'statsbomb-open' && <p className="filter-note">StatsBomb Open Data is supplied for research and education. Keep StatsBomb/Hudl attribution when publishing analysis.</p>}
       <button className="primary-button">Load free data</button>
-    </form>}
+    </form>
 
     {loading && <LoadingState label="Loading provider data…" />}
     {error && <ErrorState message={error} />}
-    {!loading && !error && provider !== 'api-football' && !result && <EmptyState title="Choose a provider query" message="No-key providers work immediately. API-Football and football-data.org require their optional free server-side keys." />}
+    {!loading && !error && !result && <EmptyState title="Choose a no-key provider query" message="TheSportsDB public access, OpenLigaDB and StatsBomb Open Data work immediately with no setup." />}
     {!loading && !error && result?.type === 'standings' && (result.rows.length ? <StandingsTable rows={result.rows} /> : <EmptyState title="No standings returned" />)}
     {!loading && !error && result?.type === 'matches' && (result.rows.length ? <MatchTable rows={result.rows} /> : <EmptyState title="No matches returned" />)}
     {!loading && !error && result?.type === 'players' && (result.players.length ? <PlayerRows players={result.players} stats={result.stats} onFindProfile={name => navigate(`/players?q=${encodeURIComponent(name)}`)} /> : <EmptyState title="No players returned" />)}
