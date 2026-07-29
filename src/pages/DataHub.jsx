@@ -5,9 +5,11 @@ import {
   getOpenLigaGoalGetters,
   getOpenLigaMatches,
   getOpenLigaTable,
+  getPlayers,
   getSportsDbLeagues,
   getStatsBombCompetitions,
   getStatsBombMatches,
+  search,
   searchSportsDbPlayers,
   searchSportsDbTeams
 } from '../api/client'
@@ -19,7 +21,8 @@ import {
   normalizeSportsDbTeams,
   normalizeStatsBombCompetitions
 } from '../api/freeProviders'
-import { getImageFallback } from '../api/utils'
+import { playerSearchVariants, teamSearchVariants } from '../api/searchAliases'
+import { formatMarketValue, getImageFallback } from '../api/utils'
 import { EmptyState, ErrorState, LoadingState } from '../components/StateMessage'
 
 const DEFAULT_SEASON = String(new Date().getFullYear() - 1)
@@ -61,6 +64,26 @@ function providerModes(provider) {
   return []
 }
 
+async function findSportsDbTeams(query) {
+  for (const variant of teamSearchVariants(query)) {
+    const rows = normalizeSportsDbTeams(await searchSportsDbTeams(variant))
+    if (rows.length) return { rows, matchedQuery: variant }
+  }
+  return { rows: [], matchedQuery: query }
+}
+
+async function findSportsDbPlayers(query) {
+  for (const variant of playerSearchVariants(query)) {
+    const players = normalizeSportsDbPlayers(await searchSportsDbPlayers(variant))
+    if (players.length) return { players, matchedQuery: variant, source: 'thesportsdb' }
+  }
+
+  const marketSearch = await search(query)
+  const ids = (marketSearch.playerIds || []).slice(0, 10)
+  const players = ids.length ? await getPlayers(ids) : []
+  return { players, matchedQuery: query, source: 'market-fallback' }
+}
+
 function StandingsTable({ rows }) {
   return <div className="table-scroll"><table className="table standings-table"><thead><tr><th>#</th><th>Team</th><th>P</th><th>W</th><th>D</th><th>L</th><th>GF</th><th>GA</th><th>GD</th><th>Pts</th></tr></thead><tbody>{rows.map((row, index) => <tr key={row.teamId || row.teamName || index}><td>{row.position ?? index + 1}</td><td><span className="table-team">{row.crest && <img src={row.crest} alt="" onError={getImageFallback} />}<strong>{row.teamName}</strong></span></td><td>{row.played ?? '-'}</td><td>{row.won ?? '-'}</td><td>{row.draw ?? '-'}</td><td>{row.lost ?? '-'}</td><td>{row.goalsFor ?? '-'}</td><td>{row.goalsAgainst ?? '-'}</td><td>{row.goalDifference ?? '-'}</td><td><strong>{row.points ?? '-'}</strong></td></tr>)}</tbody></table></div>
 }
@@ -69,10 +92,17 @@ function MatchTable({ rows }) {
   return <div className="table-scroll"><table className="table provider-match-table"><thead><tr><th>Date</th><th>Competition</th><th>Home</th><th>Score</th><th>Away</th><th>Status</th></tr></thead><tbody>{rows.map((row, index) => <tr key={row.id || index}><td>{row.date ? new Date(row.date).toLocaleDateString() : '-'}</td><td>{row.competition || '-'}</td><td><strong>{row.home}</strong></td><td>{row.homeScore ?? '-'} – {row.awayScore ?? '-'}</td><td><strong>{row.away}</strong></td><td>{row.status}</td></tr>)}</tbody></table></div>
 }
 
-function PlayerRows({ players, stats, onFindProfile }) {
+function PlayerRows({ players, stats, onFindProfile, onOpenProfile }) {
   return <div className="provider-result-grid">{players.map(player => {
     const playerStats = stats?.[player.id] || {}
-    return <article className="provider-result-card" key={player.id}><div className="scout-card-top"><img src={player.portraitUrl} alt="" onError={getImageFallback} /><div><h2>{player.name}</h2><p>{player.attributes?.position?.name || 'Position unavailable'}</p><small>{player.clubAssignments?.[0]?.clubName || player.nationality || 'Metadata unavailable'}</small></div></div><div className="scout-metrics">{[['Apps', playerStats.appearances], ['Goals', playerStats.goals], ['Assists', playerStats.assists]].map(([label, value]) => <span key={label}>{label}<strong>{value ?? '-'}</strong></span>)}</div><button className="secondary-button" type="button" onClick={() => onFindProfile(player.name)}>Find market profile</button></article>
+    const isMarketProfile = player.provider !== 'thesportsdb' && player.provider !== 'openligadb'
+    const clubName = player.clubAssignments?.[0]?.clubName
+    return <article className="provider-result-card" key={player.id}>
+      <div className="scout-card-top"><img src={player.portraitUrl} alt="" onError={getImageFallback} /><div><h2>{player.name}</h2><p>{player.attributes?.position?.name || 'Position unavailable'}</p><small>{clubName || (isMarketProfile ? 'No current club returned' : player.nationality || 'Metadata unavailable')}</small></div></div>
+      <div className="scout-metrics">{[['Apps', playerStats.appearances], ['Goals', playerStats.goals], ['Assists', playerStats.assists]].map(([label, value]) => <span key={label}>{label}<strong>{value ?? '-'}</strong></span>)}</div>
+      {isMarketProfile && <strong>{formatMarketValue(player.marketValueDetails?.current?.value)}</strong>}
+      <button className="secondary-button" type="button" onClick={() => isMarketProfile ? onOpenProfile(player.id) : onFindProfile(player.name)}>{isMarketProfile ? 'Open current profile' : 'Find market profile'}</button>
+    </article>
   })}</div>
 }
 
@@ -81,7 +111,7 @@ export default function DataHub() {
   const [provider, setProvider] = useState('thesportsdb')
   const [mode, setMode] = useState('teams')
   const [season, setSeason] = useState(DEFAULT_SEASON)
-  const [query, setQuery] = useState('Raja Casablanca')
+  const [query, setQuery] = useState('Raja Club Athletic')
   const [country, setCountry] = useState('Morocco')
   const [shortcut, setShortcut] = useState('bl1')
   const [statsBombSelection, setStatsBombSelection] = useState('')
@@ -107,8 +137,14 @@ export default function DataHub() {
     setResult(null)
     try {
       if (provider === 'thesportsdb') {
-        if (mode === 'teams') setResult({ type: 'teams', rows: normalizeSportsDbTeams(await searchSportsDbTeams(query.trim())) })
-        if (mode === 'players') setResult({ type: 'players', players: normalizeSportsDbPlayers(await searchSportsDbPlayers(query.trim())), stats: {} })
+        if (mode === 'teams') {
+          const found = await findSportsDbTeams(query.trim())
+          setResult({ type: 'teams', rows: found.rows, note: found.matchedQuery !== query.trim() ? `No exact record was returned for “${query.trim()}”. The compatible database name “${found.matchedQuery}” was used.` : 'TheSportsDB team records are useful metadata, but their squad-member lists may be incomplete.' })
+        }
+        if (mode === 'players') {
+          const found = await findSportsDbPlayers(query.trim())
+          setResult({ type: 'players', players: found.players, stats: {}, note: found.source === 'market-fallback' ? `TheSportsDB returned no player profile for “${query.trim()}”. Results below come from the no-key market-profile fallback.` : found.matchedQuery !== query.trim() ? `Matched the spelling variant “${found.matchedQuery}”.` : '' })
+        }
         if (mode === 'leagues') {
           const payload = await getSportsDbLeagues(country.trim())
           setResult({ type: 'leagues', rows: payload?.countries || payload?.leagues || [] })
@@ -173,9 +209,10 @@ export default function DataHub() {
     {loading && <LoadingState label="Loading provider data…" />}
     {error && <ErrorState message={error} />}
     {!loading && !error && !result && <EmptyState title="Choose a no-key provider query" message="TheSportsDB public access, OpenLigaDB and StatsBomb Open Data work immediately with no setup." />}
+    {!loading && !error && result?.note && <p className="filter-note provider-result-note">{result.note}</p>}
     {!loading && !error && result?.type === 'standings' && (result.rows.length ? <StandingsTable rows={result.rows} /> : <EmptyState title="No standings returned" />)}
     {!loading && !error && result?.type === 'matches' && (result.rows.length ? <MatchTable rows={result.rows} /> : <EmptyState title="No matches returned" />)}
-    {!loading && !error && result?.type === 'players' && (result.players.length ? <PlayerRows players={result.players} stats={result.stats} onFindProfile={name => navigate(`/players?q=${encodeURIComponent(name)}`)} /> : <EmptyState title="No players returned" />)}
+    {!loading && !error && result?.type === 'players' && (result.players.length ? <PlayerRows players={result.players} stats={result.stats} onFindProfile={name => navigate(`/players?q=${encodeURIComponent(name)}`)} onOpenProfile={id => navigate(`/players/${id}`)} /> : <EmptyState title="No players returned" />)}
     {!loading && !error && result?.type === 'teams' && (result.rows.length ? <div className="provider-result-grid">{result.rows.map(team => <article className="provider-result-card" key={team.id}>{team.badge && <img className="provider-team-badge" src={team.badge} alt="" onError={getImageFallback} />}<h2>{team.name}</h2><p>{team.league} · {team.country}</p><small>{team.stadium || 'Stadium unavailable'}{team.formedYear ? ` · Founded ${team.formedYear}` : ''}</small></article>)}</div> : <EmptyState title="No teams returned" />)}
     {!loading && !error && result?.type === 'leagues' && (result.rows.length ? <div className="provider-result-grid">{result.rows.map((league, index) => <article className="provider-result-card" key={league.idLeague || league.leagueId || index}><h2>{league.strLeague || league.leagueName || league.strLeagueAlternate || 'League'}</h2><p>{league.strCountry || league.leagueShortcut || league.strSport || ''}</p><small>{league.strCurrentSeason || league.leagueSeason || league.idLeague || league.leagueId || ''}</small></article>)}</div> : <EmptyState title="No leagues returned" />)}
     {!loading && !error && result?.type === 'statsbomb-competitions' && (result.rows.length ? <div className="provider-result-grid">{result.rows.map(item => <button className="provider-result-card selectable" type="button" key={item.id} onClick={() => { setStatsBombSelection(item.id); setMode('matches'); setResult(null) }}><h2>{item.name}</h2><p>{item.country} · {item.seasonName}</p><small>{item.gender || 'Competition'} · select to load matches</small></button>)}</div> : <EmptyState title="No StatsBomb datasets returned" />)}
