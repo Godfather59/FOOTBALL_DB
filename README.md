@@ -41,6 +41,8 @@ A responsive football data and recruitment workspace for players, clubs and comp
 | StatsBomb Open Data | None | Historical research matches and event datasets | Selected historical datasets, not comprehensive live coverage |
 | Market profile source | None configured by this project | Values, contracts and transfer histories | Unofficial, keyword-dependent coverage |
 
+The application integrates the major stable free providers above rather than claiming to include every experimental or abandoned football API on the internet.
+
 The application does not merge provider IDs. External results use **Find market profile** rather than assuming that an API-Football, TheSportsDB or OpenLigaDB ID matches a market-profile ID.
 
 Transfer-fit and similarity scores are transparent decision-support estimates, not predictions of real transfers or guarantees of sporting performance.
