@@ -32,62 +32,48 @@ function playerShell({ id, provider, name, portraitUrl = '', age = null, dateOfB
 
 export const FREE_PROVIDERS = [
   {
-    id: 'auto-free',
-    name: 'Automatic free fallback',
-    keyRequirement: 'Optional key improves coverage',
-    capabilities: ['detailed player statistics', 'goal scorers'],
-    description: 'Uses API-Football first and falls back to OpenLigaDB goal-scorer data where that competition is available.'
-  },
-  {
-    id: 'api-football',
-    name: 'API-Football',
-    keyRequirement: 'API_FOOTBALL_KEY',
-    capabilities: ['detailed player statistics', 'fixtures', 'tables', 'transfers', 'injuries'],
-    description: 'Best free source for league-and-season scouting. Free usage has daily and per-minute limits.'
-  },
-  {
-    id: 'football-data',
-    name: 'football-data.org',
-    keyRequirement: 'FOOTBALL_DATA_TOKEN',
-    capabilities: ['fixtures', 'schedules', 'league tables'],
-    description: 'Free-forever basic coverage for selected competitions. Paid-only scorers, squads and deep data are intentionally not used.'
+    id: 'legacy-competition',
+    name: 'No-key league scouting',
+    keyRequirement: 'No key',
+    capabilities: ['player profiles', 'season statistics', 'market values', 'contracts'],
+    description: 'Discovers a competition through the existing no-key market-data sources, then applies statistics and recruitment filters. Coverage depends on the unofficial upstream response.'
   },
   {
     id: 'thesportsdb',
     name: 'TheSportsDB',
-    keyRequirement: 'No private key',
-    capabilities: ['team metadata', 'player metadata', 'league tables', 'schedules', 'images'],
-    description: 'Uses the public v1 key. Free responses are intentionally limited but useful as a metadata fallback.'
+    keyRequirement: 'No user key',
+    capabilities: ['team metadata', 'player metadata', 'league lists', 'images'],
+    description: 'Uses TheSportsDB public v1 access built into the application. Free responses are limited but require no account or configuration.'
   },
   {
     id: 'openligadb',
     name: 'OpenLigaDB',
     keyRequirement: 'No key',
     capabilities: ['fixtures', 'results', 'tables', 'goal scorers'],
-    description: 'Community-maintained, no-key data. Coverage is strongest for German competitions.'
+    description: 'Community-maintained no-key data. Coverage is strongest for German competitions, and scorer records provide goals rather than full performance statistics.'
   },
   {
     id: 'statsbomb-open',
     name: 'StatsBomb Open Data',
     keyRequirement: 'No key',
     capabilities: ['historical matches', 'lineups', 'event data', 'selected 360 data'],
-    description: 'Open historical research data for selected competitions, not a comprehensive live feed.'
+    description: 'Open historical research data for selected competitions. It is not a comprehensive live feed and requires source attribution when publishing analysis.'
   },
   {
     id: 'legacy-keyword',
-    name: 'Market profile source',
-    keyRequirement: 'No private key configured',
-    capabilities: ['market values', 'contracts', 'transfer histories'],
-    description: 'Retained for market-value and contract workflows. Coverage is keyword-dependent and unofficial.'
+    name: 'No-key market profile search',
+    keyRequirement: 'No key',
+    capabilities: ['market values', 'contracts', 'transfer histories', 'career statistics'],
+    description: 'Searches the existing no-key market profile sources by player, club, league, country or position. Coverage is keyword-dependent and unofficial.'
   }
 ]
 
 export const PROVIDER_METRICS = {
-  'api-football': new Set(['age', 'position', 'appearances', 'minutes', 'goals', 'assists', 'rating']),
+  'legacy-competition': new Set(['age', 'position', 'appearances', 'minutes', 'goals', 'assists', 'value', 'contract']),
+  'legacy-keyword': new Set(['age', 'position', 'appearances', 'minutes', 'goals', 'assists', 'value', 'contract']),
   openligadb: new Set(['goals']),
   thesportsdb: new Set(['age', 'position']),
-  'statsbomb-open': new Set(['events']),
-  'legacy-keyword': new Set(['age', 'position', 'appearances', 'minutes', 'goals', 'assists', 'value', 'contract'])
+  'statsbomb-open': new Set(['events'])
 }
 
 export function getFreeProvider(id) {
@@ -150,25 +136,6 @@ export function normalizeSportsDbTeams(payload) {
     badge: item.strBadge || item.strLogo || '',
     description: item.strDescriptionEN || ''
   })).filter(item => item.id)
-}
-
-export function normalizeFootballDataStandings(payload) {
-  const standings = Array.isArray(payload?.standings) ? payload.standings : []
-  const total = standings.find(item => item.type === 'TOTAL') || standings[0]
-  return (total?.table || []).map(row => ({
-    position: row.position,
-    teamId: row.team?.id,
-    teamName: row.team?.name || row.team?.shortName || '',
-    crest: row.team?.crest || '',
-    played: row.playedGames,
-    won: row.won,
-    draw: row.draw,
-    lost: row.lost,
-    goalsFor: row.goalsFor,
-    goalsAgainst: row.goalsAgainst,
-    goalDifference: row.goalDifference,
-    points: row.points
-  }))
 }
 
 export function normalizeOpenLigaTable(payload) {
