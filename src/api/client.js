@@ -169,12 +169,6 @@ export function getFootballDataStandings(code, season, options = {}) {
   return request('fd', `competitions/${encodeURIComponent(code)}/standings${params}`, { cacheTtl: MEDIUM_CACHE_TTL, ...options })
 }
 
-export function getFootballDataScorers(code, season, limit = 100, options = {}) {
-  const params = new URLSearchParams({ limit: String(limit) })
-  if (season) params.set('season', String(season))
-  return request('fd', `competitions/${encodeURIComponent(code)}/scorers?${params}`, { cacheTtl: MEDIUM_CACHE_TTL, ...options })
-}
-
 export function getFootballDataMatches(code, season, options = {}) {
   const params = season ? `?season=${encodeURIComponent(season)}` : ''
   return request('fd', `competitions/${encodeURIComponent(code)}/matches${params}`, { cacheTtl: MEDIUM_CACHE_TTL, ...options })
