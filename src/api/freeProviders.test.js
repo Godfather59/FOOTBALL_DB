@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  normalizeFootballDataStandings,
+  FREE_PROVIDERS,
   normalizeOpenLigaGoalGetters,
   normalizeSportsDbPlayers,
   normalizeStatsBombCompetitions,
@@ -21,19 +21,17 @@ test('TheSportsDB player search is normalized', () => {
   assert.equal(players[0].clubAssignments[0].clubName, 'Example Club')
 })
 
-test('football-data standings use the free total table', () => {
-  const rows = normalizeFootballDataStandings({ standings: [{ type: 'TOTAL', table: [{ position: 1, team: { id: 1, name: 'Leader' }, playedGames: 10, won: 8, draw: 1, lost: 1, goalsFor: 20, goalsAgainst: 5, goalDifference: 15, points: 25 }] }] })
-  assert.equal(rows[0].teamName, 'Leader')
-  assert.equal(rows[0].points, 25)
-})
-
 test('StatsBomb competition seasons get stable composite IDs', () => {
   const rows = normalizeStatsBombCompetitions([{ competition_id: 11, season_id: 90, competition_name: 'Example', season_name: '2025/26' }])
   assert.equal(rows[0].id, '11-90')
 })
 
 test('provider capability checks avoid pretending unsupported metrics exist', () => {
-  assert.equal(providerSupports('api-football', 'assists'), true)
+  assert.equal(providerSupports('legacy-competition', 'assists'), true)
   assert.equal(providerSupports('openligadb', 'assists'), false)
-  assert.equal(providerSupports('football-data', 'goals'), false)
+  assert.equal(providerSupports('thesportsdb', 'goals'), false)
+})
+
+test('all configured providers require no user key', () => {
+  assert.ok(FREE_PROVIDERS.every(provider => !provider.keyRequirement.includes('API_') && !provider.keyRequirement.includes('TOKEN')))
 })
