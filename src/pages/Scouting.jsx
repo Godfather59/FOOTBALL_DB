@@ -30,7 +30,6 @@ const SORTS = [
 const DOMESTIC_COMPETITIONS = COMPETITIONS.filter(item => !['CL', 'EL', 'UCOL'].includes(item.code))
 const PROVIDER_LABELS = {
   'api-football': 'API-Football',
-  'football-data': 'football-data.org',
   openligadb: 'OpenLigaDB',
   'legacy-keyword': 'Market profile source'
 }
@@ -41,7 +40,6 @@ function providerForControls(source, coverage) {
 }
 
 function sourceCompetitions(source) {
-  if (source === 'football-data') return DOMESTIC_COMPETITIONS.filter(item => item.footballDataCode)
   if (source === 'openligadb') return DOMESTIC_COMPETITIONS.filter(item => item.openLigaShortcut)
   return DOMESTIC_COMPETITIONS
 }
@@ -113,7 +111,7 @@ export default function Scouting() {
 
   const positions = useMemo(() => [...new Set(players.map(player => getPositionName(player.attributes?.position)).filter(name => name && name !== 'Unknown'))].sort(), [players])
   const effectiveProvider = providerForControls(source, coverage)
-  const canUse = metric => source === 'auto-free' || providerSupports(effectiveProvider, metric)
+  const canUse = metric => source === 'auto-free' && !coverage.provider ? true : providerSupports(effectiveProvider, metric)
 
   const results = useMemo(() => players.filter(player => {
     const playerStats = stats[player.id]
@@ -149,7 +147,7 @@ export default function Scouting() {
 
   const setFilter = (key, value) => setFilters(current => ({ ...current, [key]: value }))
   const competitions = sourceCompetitions(source)
-  const availableSorts = SORTS.filter(([, , metric]) => source === 'auto-free' || providerSupports(effectiveProvider, metric))
+  const availableSorts = SORTS.filter(([, , metric]) => source === 'auto-free' && !coverage.provider ? true : providerSupports(effectiveProvider, metric))
 
   function changeSource(nextSource) {
     setSource(nextSource)
@@ -186,7 +184,6 @@ export default function Scouting() {
           <label>Data source<select value={source} onChange={event => changeSource(event.target.value)}>
             <option value="auto-free">Automatic free fallback</option>
             <option value="api-football">API-Football detailed statistics</option>
-            <option value="football-data">football-data.org top scorers</option>
             <option value="openligadb">OpenLigaDB goal scorers</option>
             <option value="legacy-keyword">Market value and contracts keyword</option>
           </select></label>
@@ -213,8 +210,8 @@ export default function Scouting() {
 
       {error && <ErrorState message={error} onRetry={run ? () => setRetry(value => value + 1) : undefined} />}
       {loading && <CardSkeletonGrid count={8} />}
-      {!run && !loading && <EmptyState title="Build a scouting brief" message="Automatic mode works without a player name and falls back across compatible free providers." />}
-      {!loading && !error && run && !results.length && <EmptyState title="No profiles match" message="Lower a threshold or choose a provider that supplies the required metric. OpenLigaDB, for example, supplies goals but not assists or minutes." />}
+      {!run && !loading && <EmptyState title="Build a scouting brief" message="Automatic mode works without a player name. It uses API-Football first and OpenLigaDB only where compatible." />}
+      {!loading && !error && run && !results.length && <EmptyState title="No profiles match" message="Lower a threshold or choose a provider that supplies the required metric. OpenLigaDB supplies goals but not assists or minutes." />}
 
       {!loading && !error && run && results.length > 0 && <>
         <p className="result-summary"><strong>{results.length}</strong> matches from {coverage.analyzed} analyzed · {resultSummary(run, coverage)}.</p>
@@ -223,7 +220,7 @@ export default function Scouting() {
           {results.map(player => {
             const club = getClubFromAssignments(player.clubAssignments)
             const playerStats = stats[player.id]
-            const isMarketProfile = player.provider !== 'api-football' && player.provider !== 'football-data' && player.provider !== 'openligadb'
+            const isMarketProfile = player.provider !== 'api-football' && player.provider !== 'openligadb'
             const opportunity = isMarketProfile ? getContractOpportunity(player, Number(filters.contractMonths || 18)) : null
             return <article className={`card scout-card ${isMarketProfile ? '' : 'external-provider-card'}`} key={player.id} onClick={isMarketProfile ? () => navigate(`/players/${player.id}`) : undefined}>
               <div className="scout-card-top"><img src={player.portraitUrl} alt="" onError={getImageFallback} /><div><h2>{player.name}</h2><p>{getPositionName(player.attributes?.position) || 'Position unavailable'}</p><small>{getClubName(club) || 'Club unavailable'}</small></div></div>
