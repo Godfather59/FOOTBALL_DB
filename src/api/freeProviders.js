@@ -34,9 +34,9 @@ export const FREE_PROVIDERS = [
   {
     id: 'auto-free',
     name: 'Automatic free fallback',
-    keyRequirement: 'Optional keys improve coverage',
-    capabilities: ['player statistics', 'top scorers', 'fixtures', 'tables', 'metadata'],
-    description: 'Uses API-Football first, then football-data.org and OpenLigaDB when a richer provider is unavailable.'
+    keyRequirement: 'Optional key improves coverage',
+    capabilities: ['detailed player statistics', 'goal scorers'],
+    description: 'Uses API-Football first and falls back to OpenLigaDB goal-scorer data where that competition is available.'
   },
   {
     id: 'api-football',
@@ -49,8 +49,8 @@ export const FREE_PROVIDERS = [
     id: 'football-data',
     name: 'football-data.org',
     keyRequirement: 'FOOTBALL_DATA_TOKEN',
-    capabilities: ['fixtures', 'tables', 'top scorers'],
-    description: 'Free-forever basic coverage for selected competitions. Scouting is limited to scorer-list fields.'
+    capabilities: ['fixtures', 'schedules', 'league tables'],
+    description: 'Free-forever basic coverage for selected competitions. Paid-only scorers, squads and deep data are intentionally not used.'
   },
   {
     id: 'thesportsdb',
@@ -84,7 +84,6 @@ export const FREE_PROVIDERS = [
 
 export const PROVIDER_METRICS = {
   'api-football': new Set(['age', 'position', 'appearances', 'minutes', 'goals', 'assists', 'rating']),
-  'football-data': new Set(['age', 'position', 'appearances', 'goals', 'assists']),
   openligadb: new Set(['goals']),
   thesportsdb: new Set(['age', 'position']),
   'statsbomb-open': new Set(['events']),
@@ -97,42 +96,6 @@ export function getFreeProvider(id) {
 
 export function providerSupports(providerId, metric) {
   return PROVIDER_METRICS[providerId]?.has(metric) || false
-}
-
-export function normalizeFootballDataScorers(payload, competition, season) {
-  const rows = Array.isArray(payload?.scorers) ? payload.scorers : []
-  const players = []
-  const stats = {}
-  for (const item of rows) {
-    const source = item?.player || {}
-    const team = item?.team || {}
-    const id = source.id || source.name
-    if (!id) continue
-    const player = playerShell({
-      id,
-      provider: 'football-data',
-      name: source.name || [source.firstName, source.lastName].filter(Boolean).join(' '),
-      age: ageFromDate(source.dateOfBirth),
-      dateOfBirth: source.dateOfBirth || null,
-      nationality: source.nationality || '',
-      position: source.position || 'Unknown',
-      clubName: team.name || '',
-      clubId: team.id || '',
-      crestUrl: team.crest || '',
-      season
-    })
-    player.footballDataCompetition = competition?.footballDataCode || payload?.competition?.code || ''
-    players.push(player)
-    stats[player.id] = {
-      appearances: numberOrNull(item.playedMatches),
-      minutes: null,
-      goals: numberOrNull(item.goals) ?? 0,
-      assists: numberOrNull(item.assists),
-      penalties: numberOrNull(item.penalties),
-      rating: null
-    }
-  }
-  return { players, stats }
 }
 
 export function normalizeOpenLigaGoalGetters(payload, competition, season) {
