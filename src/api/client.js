@@ -35,13 +35,6 @@ async function parseResponse(res) {
   }
 }
 
-function apiFootballError(errors) {
-  if (!errors) return ''
-  if (Array.isArray(errors)) return errors.filter(Boolean).join(', ')
-  if (typeof errors === 'object') return Object.values(errors).filter(Boolean).join(', ')
-  return String(errors)
-}
-
 async function request(source, endpoint, options = {}) {
   const { signal, cacheTtl = DEFAULT_CACHE_TTL, bypassCache = false } = options
   const url = makeUrl(source, endpoint)
@@ -63,10 +56,6 @@ async function request(source, endpoint, options = {}) {
 
   if (source === 'tm' && body?.success === false) {
     throw new Error(body.message || 'Football data API error')
-  }
-  if (source === 'af') {
-    const detail = apiFootballError(body?.errors)
-    if (detail) throw new Error(`API-Football: ${detail}`)
   }
 
   const data = source === 'tm' ? body?.data ?? body : body
@@ -148,30 +137,6 @@ export function getCompetition(code, options = {}) {
 
 export function getCompetitionTable(code, options = {}) {
   return request('tm', `competition/${encodeURIComponent(code)}/table`, options)
-}
-
-export function getApiFootballLeagues(searchTerm, season, options = {}) {
-  const params = new URLSearchParams({ search: searchTerm, season: String(season) })
-  return request('af', `leagues?${params}`, { cacheTtl: DAILY_CACHE_TTL, ...options })
-}
-
-export function getApiFootballPlayers(leagueId, season, page = 1, options = {}) {
-  const params = new URLSearchParams({ league: String(leagueId), season: String(season), page: String(page) })
-  return request('af', `players?${params}`, { cacheTtl: DAILY_CACHE_TTL, ...options })
-}
-
-export function getFootballDataCompetitions(options = {}) {
-  return request('fd', 'competitions', { cacheTtl: DAILY_CACHE_TTL, ...options })
-}
-
-export function getFootballDataStandings(code, season, options = {}) {
-  const params = season ? `?season=${encodeURIComponent(season)}` : ''
-  return request('fd', `competitions/${encodeURIComponent(code)}/standings${params}`, { cacheTtl: MEDIUM_CACHE_TTL, ...options })
-}
-
-export function getFootballDataMatches(code, season, options = {}) {
-  const params = season ? `?season=${encodeURIComponent(season)}` : ''
-  return request('fd', `competitions/${encodeURIComponent(code)}/matches${params}`, { cacheTtl: MEDIUM_CACHE_TTL, ...options })
 }
 
 export function searchSportsDbPlayers(query, options = {}) {
