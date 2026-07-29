@@ -6,10 +6,10 @@ A responsive football data and recruitment workspace for players, clubs and comp
 
 ### Multi-provider free data
 
-- Automatic free scouting fallback: API-Football → football-data.org → OpenLigaDB
+- Automatic free scouting fallback: API-Football → OpenLigaDB where compatible
 - Free Data Hub for provider-specific tables, fixtures, scorer lists, team/player metadata and historical open matches
 - API-Football league-and-season player statistics without requiring a player name
-- football-data.org free competition standings, fixtures and top-scorer lists
+- football-data.org free competition standings and fixture schedules
 - TheSportsDB public v1 metadata, images, player/team search and country league lists
 - OpenLigaDB no-key league discovery, standings, matches and goal scorers
 - StatsBomb Open Data competition-season and historical match browser
@@ -35,13 +35,13 @@ A responsive football data and recruitment workspace for players, clubs and comp
 | Provider | Private key | Best free use | Important limitation |
 |---|---|---|---|
 | API-Football | `API_FOOTBALL_KEY` | Detailed league player statistics | Free daily quota and limited historical seasons |
-| football-data.org | `FOOTBALL_DATA_TOKEN` | Selected competition fixtures, tables and scorers | Free basic plan covers selected competitions and not full scouting depth |
+| football-data.org | `FOOTBALL_DATA_TOKEN` | Selected competition fixtures and tables | Scorers, squads and deeper data are not used because they are outside the free basic tier |
 | TheSportsDB | None | Team/player metadata, images and basic schedules | Public v1 responses and list sizes are limited |
 | OpenLigaDB | None | Community fixtures, results, tables and goal scorers | Coverage is strongest for German competitions; scorer feed has goals only |
 | StatsBomb Open Data | None | Historical research matches and event datasets | Selected historical datasets, not comprehensive live coverage |
 | Market profile source | None configured by this project | Values, contracts and transfer histories | Unofficial, keyword-dependent coverage |
 
-The application does not merge provider IDs. External results use **Find market profile** rather than assuming that an API-Football, football-data.org, TheSportsDB or OpenLigaDB ID matches a market-profile ID.
+The application does not merge provider IDs. External results use **Find market profile** rather than assuming that an API-Football, TheSportsDB or OpenLigaDB ID matches a market-profile ID.
 
 Transfer-fit and similarity scores are transparent decision-support estimates, not predictions of real transfers or guarantees of sporting performance.
 
