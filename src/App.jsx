@@ -10,6 +10,7 @@ import ClubDetail from './pages/ClubDetail'
 import CompetitionSearch from './pages/CompetitionSearch'
 import CompetitionDetail from './pages/CompetitionDetail'
 import Scouting from './pages/Scouting'
+import DataHub from './pages/DataHub'
 import PlayerCompare from './pages/PlayerCompare'
 import Watchlist from './pages/Watchlist'
 import Opportunities from './pages/Opportunities'
@@ -31,6 +32,7 @@ export default function App() {
     <Route path="/competitions" element={<CompetitionSearch />} />
     <Route path="/competitions/:id" element={<CompetitionDetail />} />
     <Route path="/scout" element={<Scouting />} />
+    <Route path="/data-hub" element={<DataHub />} />
     <Route path="/compare" element={<PlayerCompare />} />
     <Route path="/watchlist" element={<Watchlist />} />
     <Route path="/opportunities" element={<Opportunities />} />
