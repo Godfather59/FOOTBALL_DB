@@ -4,7 +4,6 @@ import {
   getClubSquad,
   getCompetition,
   getCompetitionTable,
-  getFootballDataScorers,
   getOpenLigaGoalGetters,
   getPlayers,
   getPlayerSeasonalStats,
@@ -13,7 +12,7 @@ import {
 } from './client.js'
 import { API_FOOTBALL_MAX_PAGES, chooseApiFootballLeague, normalizeApiFootballPage } from './apiFootball.js'
 import { getKnownCompetition } from './competitionCatalog.js'
-import { normalizeFootballDataScorers, normalizeOpenLigaGoalGetters } from './freeProviders.js'
+import { normalizeOpenLigaGoalGetters } from './freeProviders.js'
 import { chunk, getPositionName, isAbortError, mapWithConcurrency, summarizePerformances, uniqueBy } from './utils.js'
 
 export const MAX_SCOUTING_PROFILES = 240
@@ -130,30 +129,6 @@ async function loadApiFootballPool(config, options) {
   }
 }
 
-async function loadFootballDataPool(config, options) {
-  const competition = config.competition || getKnownCompetition(config.competitionCode)
-  const season = seasonStartYear(config.season)
-  if (!competition?.footballDataCode) throw new Error(`${competition?.name || 'This competition'} is not mapped to football-data.org free coverage.`)
-  if (!season) throw new Error('Enter a valid season start year, such as 2025.')
-  const payload = await getFootballDataScorers(competition.footballDataCode, season, 100, options)
-  const normalized = normalizeFootballDataScorers(payload, competition, season)
-  if (!normalized.players.length) throw new Error(`football-data.org returned no scorer records for ${competition.name} in season ${season}.`)
-  return {
-    profiles: normalized.players,
-    stats: normalized.stats,
-    coverage: {
-      provider: 'football-data',
-      league: payload?.competition?.name || competition.name,
-      country: payload?.competition?.area?.name || competition.country,
-      season,
-      analyzed: normalized.players.length,
-      discovered: normalized.players.length,
-      truncated: false,
-      supportedMetrics: ['age', 'position', 'appearances', 'goals', 'assists']
-    }
-  }
-}
-
 async function loadOpenLigaPool(config, options) {
   const competition = config.competition || getKnownCompetition(config.competitionCode)
   const season = seasonStartYear(config.season)
@@ -181,7 +156,6 @@ async function loadOpenLigaPool(config, options) {
 async function loadAutoFreePool(config, options) {
   const attempts = [
     ['API-Football', loadApiFootballPool],
-    ['football-data.org', loadFootballDataPool],
     ['OpenLigaDB', loadOpenLigaPool]
   ]
   const failures = []
@@ -293,7 +267,6 @@ async function loadLegacyPool(config, options) {
 export function loadScoutingPool(config, options = {}) {
   if (config.source === 'auto-free') return loadAutoFreePool(config, options)
   if (config.source === 'api-football') return loadApiFootballPool(config, options)
-  if (config.source === 'football-data') return loadFootballDataPool(config, options)
   if (config.source === 'openligadb') return loadOpenLigaPool(config, options)
   return loadLegacyPool(config, options)
 }
